@@ -8,21 +8,13 @@ A CPU-based software raytracer written in C++17 with no external dependencies. R
 - **POSIX threads** (standard on Linux/macOS)
 - No external libraries required
 
-## Building
+## Rendering
 
 ```bash
-bash build.sh
+./render.sh scenes/qbd.yaml
 ```
 
-This compiles the project with `-O3` optimization and produces a `raytracer` executable in the project root.
-
-## Running
-
-```bash
-./raytracer scenes/qbd.yaml
-```
-
-A scene YAML file is required. The renderer uses all available CPU cores automatically. Output is saved to `renders/render-<timestamp>.bmp`.
+This builds the project (if needed) and renders the scene. Output is saved to `renders/render-<timestamp>.bmp`.
 
 ## Scene Configuration
 

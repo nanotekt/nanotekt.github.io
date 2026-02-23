@@ -1,1 +1,2 @@
-g++ -O3 -std=c++17 -pthread -o raytracer src/raytracer.cpp -lm
+./build.sh
+./nanore "$@"

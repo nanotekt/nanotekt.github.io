@@ -2,26 +2,26 @@
 
 ## Project Overview
 
-CPU-based C++17 raytracer. Single source file `src/raytracer.cpp`, YAML-driven scene configuration.
+CPU-based C++17 raytracer. Single source file `src/nanore.cpp`, YAML-driven scene configuration.
 
 ## Build & Render Workflow
 
-1. **Build** (only needed after modifying `src/raytracer.cpp`):
-   ```bash
-   bash build.sh
-   ```
+Render a scene (builds automatically):
+```bash
+./render.sh scenes/<scene>.yaml
+```
+Output is saved to `renders/render-<timestamp>.bmp`.
 
-2. **Render** a scene:
-   ```bash
-   ./raytracer scenes/<scene>.yaml
-   ```
-   Output is saved to `renders/render-<timestamp>.bmp`.
+To build without rendering:
+```bash
+bash build.sh
+```
 
 ## Creating New Scenes
 
 - Create YAML files in `scenes/`. Use `scenes/qbd.yaml` as the reference for all available parameters.
 - Scene files control everything without recompilation: resolution, camera, geometry, materials, lighting, fog, bloom.
-- After creating or editing a scene file, run the raytracer with it to render.
+- After creating or editing a scene file, run `./render.sh scenes/<scene>.yaml` to render.
 
 ### Quick iteration tips
 
@@ -34,7 +34,7 @@ CPU-based C++17 raytracer. Single source file `src/raytracer.cpp`, YAML-driven s
 |---------|-----------------|
 | `rendering` | Resolution, sample count, fog distance |
 | `camera` | Position and look-at target |
-| `text` | Bitmap-encoded text spheres |
+| `text` | Bitmap-encoded text spheres (`@` = filled, `.` = empty) |
 | `rounded_cube` | Reflective rounded cube (center, size, rotation) |
 | `red_disc` | Emissive disc light |
 | `floor` | Tiled floor grid (bounds, colors, reflectivity) |
@@ -48,7 +48,8 @@ CPU-based C++17 raytracer. Single source file `src/raytracer.cpp`, YAML-driven s
 
 ## File Layout
 
-- `src/raytracer.cpp` — entire renderer (single file)
-- `scenes/*.yaml` — scene definitions
+- `src/nanore.cpp` — entire renderer (single file)
+- `scenes/*.yaml` — scene definitions (must start with `version: nanore@1`)
 - `renders/*.bmp` — rendered output (timestamped, not tracked by git)
-- `build.sh` — build script
+- `render.sh` — build + render script
+- `build.sh` — build-only script
