@@ -3,7 +3,8 @@
     "allow": [
       "Bash(python3:*)",
       "Bash(./raytracer:*)",
-      "Bash(./build.sh:*)"
+      "Bash(./build.sh:*)",
+      "Bash(./render.sh:*)"
     ]
   }
 }
