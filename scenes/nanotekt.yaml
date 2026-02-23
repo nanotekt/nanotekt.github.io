@@ -20,9 +20,9 @@ text:
     5: @...@.@...@.@...@..@@@....@...@@@@@.@...@...@..
   sphere_radius: 0.8
   x_offset: -23.0
-  y_base: 9.0
+  y_base: 23.0
   y_spacing: 0.9
-  z_depth: -17.0
+  z_depth: -24.0
   slash_x_base: 0.0
   slash_y_base: 0.0
   slash_count: 0
@@ -132,6 +132,13 @@ fog:
   noise_xz: 0.012
   noise_y: 0.04
   noise_z: 0.03
+
+texts:
+  0:
+    string: with <3, skmp
+    position: [-19.5, 9.0, -17.0]
+    col_spacing: 0.5
+    row_spacing: 0.5
 
 bloom:
   radius: 24
