@@ -74,13 +74,10 @@ struct YamlConfig {
             std::string line(buf);
             while (!line.empty() && (line.back() == '\n' || line.back() == '\r'))
                 line.pop_back();
-            // Strip comments (not inside brackets)
+            // Strip comments
             size_t hash = line.find('#');
-            if (hash != std::string::npos) {
-                size_t bracket = line.find('[');
-                if (bracket == std::string::npos || hash < bracket)
-                    line = line.substr(0, hash);
-            }
+            if (hash != std::string::npos)
+                line = line.substr(0, hash);
             std::string trimmed = trim(line);
             if (trimmed.empty()) continue;
             // Indent level
@@ -125,6 +122,12 @@ struct YamlConfig {
         return def;
     }
 
+    std::string get_string(const char* key, const std::string& def = "") const {
+        auto it = data.find(key);
+        if (it == data.end()) return def;
+        return it->second;
+    }
+
     void get_int_array(const char* key, int* out, int count) const {
         auto it = data.find(key);
         if (it == data.end()) return;
@@ -148,7 +151,7 @@ struct SceneConfig {
     Vec cam{0, 3.5, 14}, target{0, 3, -12};
 
     // Text
-    int bitmap[6] = {247694, 280721, 280465, 280721, 280721, 247694};
+    std::vector<std::string> bitmap_rows;
     double sph_r = 1.0;
     double text_x_offset = -8.5, text_y_base = 8.8, text_y_spacing = 1.0, text_z = -12.0;
     double slash_x_base = -6.5, slash_y_base = 6.3;
@@ -252,7 +255,14 @@ struct SceneConfig {
         cam = cfg.get_vec("camera.position", cam);
         target = cfg.get_vec("camera.target", target);
 
-        cfg.get_int_array("text.bitmap", bitmap, 6);
+        bitmap_rows.clear();
+        for (int i = 0; ; i++) {
+            char key[64];
+            snprintf(key, sizeof(key), "text.bitmap.%d", i);
+            std::string row = cfg.get_string(key);
+            if (row.empty()) break;
+            bitmap_rows.push_back(row);
+        }
         sph_r = cfg.get_double("text.sphere_radius", sph_r);
         text_x_offset = cfg.get_double("text.x_offset", text_x_offset);
         text_y_base = cfg.get_double("text.y_base", text_y_base);
@@ -392,9 +402,9 @@ static void init_tiles() {
 }
 
 static void init_centers() {
-    for (int j = 0; j < 6; j++) {
-        for (int i = 0; i < 19; i++) {
-            if (SC.bitmap[j] & (1 << i)) {
+    for (int j = 0; j < (int)SC.bitmap_rows.size(); j++) {
+        for (int i = 0; i < (int)SC.bitmap_rows[j].size(); i++) {
+            if (SC.bitmap_rows[j][i] == '@') {
                 centers.push_back({i + SC.text_x_offset, SC.text_y_base - j * SC.text_y_spacing, SC.text_z});
             }
         }
@@ -897,6 +907,11 @@ int main(int argc, char* argv[]) {
         fprintf(stderr, "Error: could not load %s\n", scene_file);
         return 1;
     }
+    std::string version = yaml.get_string("version");
+    if (version != "nanore@1") {
+        fprintf(stderr, "Error: unsupported scene version '%s' (expected nanore@1)\n", version.c_str());
+        return 1;
+    }
     SC.load_from_yaml(yaml);
     printf("Loaded scene: %s\n", scene_file);
 
@@ -904,7 +919,7 @@ int main(int argc, char* argv[]) {
     init_centers();
 
     int W = SC.width, H = SC.height;
-    printf("Business Card Ray Tracer (C++)\n");
+    printf("nanore ray tracer\n");
     printf("  Resolution: %dx%d, %d samples/pixel\n", W, H, SC.samples);
     printf("  %zu spheres (r=%.1f), %d displaced cubes + glass\n", centers.size(), SC.sph_r, SC.tile_nx * SC.tile_nz);
     printf("  Rounded reflective cube (edge=%.0f, round=%.1f) behind text\n", SC.rcube_half * 2, SC.rcube_round);

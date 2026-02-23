@@ -1,1 +1,1 @@
-g++ -O3 -std=c++17 -pthread -o raytracer src/raytracer.cpp -lm
+g++ -O3 -std=c++17 -pthread -o nanore src/nanore.cpp -lm

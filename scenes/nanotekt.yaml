@@ -1,0 +1,140 @@
+version: nanore@1
+
+rendering:
+  width: 1024
+  height: 1024
+  samples: 4
+  fog_max_dist: 80.0
+
+camera:
+  position: [0, 5, 22]
+  target: [0, 5, -20]
+
+text:
+  bitmap:
+    0: @...@..@@@..@...@..@@@..@@@@@.@@@@@.@...@.@@@@@
+    1: @@..@.@...@.@@..@.@...@...@...@.....@..@....@..
+    2: @.@.@.@@@@@.@.@.@.@...@...@...@@@@..@@@.....@..
+    3: @..@@.@...@.@..@@.@...@...@...@.....@..@....@..
+    4: @...@.@...@.@...@.@...@...@...@.....@...@...@..
+    5: @...@.@...@.@...@..@@@....@...@@@@@.@...@...@..
+  sphere_radius: 0.8
+  x_offset: -23.0
+  y_base: 9.0
+  y_spacing: 0.9
+  z_depth: -14.0
+  slash_x_base: 0.0
+  slash_y_base: 0.0
+  slash_count: 0
+
+rounded_cube:
+  center: [0.0, 6.5, -24.0]
+  half_edge: 5.0
+  rounding: 1.0
+  rotation: [0.3, 0.5, 0.2]
+
+red_disc:
+  center: [0.0, 6.5, -34.0]
+  normal: [0.0, 0.0, 1.0]
+  radius: 18.0
+  emissive_color: [3.0, 0.6, 0.03]
+
+floor:
+  bounds_x: [-20, 20]
+  bounds_z: [-30, 22]
+  max_height: 0.0
+  white_color: [0.12, 0.12, 0.14]
+  red_color: [0.06, 0.06, 0.08]
+  diffuse: 0.3
+  ambient: 0.06
+  reflect_base: 0.3
+  reflect_mirror: 0.7
+  max_depth: 2
+  spec_power: 64
+  spec_intensity: 0.5
+
+glass:
+  edge: 1.0
+  ior: 1.5
+  fresnel_r0: 0.04
+  tint_scale: 0.1
+  tint_rgb: [0.02, 0.01, 0.005]
+  spec_power: 128
+  spec_intensity: 0.3
+  max_depth: 4
+  passthrough_depth: 6
+
+lights:
+  light1:
+    position: [10, 15, 0]
+    color: [1.0, 0.7, 0.3]
+  light2:
+    position: [-10, 15, -5]
+    color: [0.3, 0.5, 1.0]
+  light3_color: [3.0, 0.6, 0.03]
+  shadow_ambient: 0.1
+
+materials:
+  chrome:
+    color: [0.9, 0.75, 0.5]
+    diffuse: 0.25
+    ambient: 0.06
+    reflect_base: 0.25
+    reflect_mirror: 0.75
+    max_depth: 3
+    spec_power: 80
+    spec_intensity: 0.7
+  silver:
+    color: [0.95, 0.8, 0.55]
+    scratched_color: [0.5, 0.4, 0.25]
+    discolor_scale: 3.0
+    diffuse: 0.4
+    ambient: 0.1
+    reflect_base: 0.5
+    reflect_mirror: 0.5
+    max_depth: 3
+    spec_power: 40
+    spec_intensity: 0.5
+
+scratches:
+  uv_scale: 10.0
+  layer1:
+    frequency: 14.0
+    power: 4.0
+    intensity: 0.3
+  layer2:
+    angle_offset: 1.2
+    frequency: 22.0
+    phase_mult: 1.5
+    power: 5.0
+    intensity: 0.18
+  layer3:
+    angle_offset: 2.5
+    frequency: 35.0
+    phase_mult: 0.5
+    power: 6.0
+    intensity: 0.1
+
+sky:
+  base_color: [0.01, 0.01, 0.02]
+  horizon_threshold: 0.005
+  ceiling_height: 25.0
+  grid_spacing: 8.0
+  glow_width: 0.5
+  fade_rate: 0.012
+  neon_color: [1.0, 0.5, 0.15]
+  neon_intensity: 2.0
+
+fog:
+  density: 0.01
+  steps: 32
+  noise_x: 0.025
+  noise_xz: 0.012
+  noise_y: 0.04
+  noise_z: 0.03
+
+bloom:
+  radius: 24
+  threshold: 0.7
+  intensity: 0.7
+  gamma: 0.45

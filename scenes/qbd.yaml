@@ -1,5 +1,4 @@
-# Scene definition for OBD raytracer
-# Edit values here and re-render without recompiling
+version: nanore@1
 
 rendering:
   width: 1024
@@ -12,7 +11,13 @@ camera:
   target: [0, 3, -12]
 
 text:
-  bitmap: [247694, 280721, 280465, 280721, 280721, 247694]
+  bitmap:
+    0: .@@@...@@@@...@@@@.
+    1: @...@..@...@..@...@
+    2: @...@..@@@@...@...@
+    3: @...@..@...@..@...@
+    4: @...@..@...@..@...@
+    5: .@@@...@@@@...@@@@.
   sphere_radius: 1.0
   x_offset: -8.5
   y_base: 8.8
