@@ -161,6 +161,11 @@ struct SceneConfig {
     Vec rcube_center{0.0, 8.3, -20.0};
     double rcube_half = 4.0, rcube_round = 0.75;
     Vec rcube_rotation{0.45, 0.65, 0.3};
+    int rcube_count = 1;
+    double rcube_half_min = 0.8, rcube_half_max = 3.2;
+    double rcube_spread = 8.0;
+    double rcube_round_ratio = 0.2;
+    int rcube_seed = 42;
 
     // Red disc
     Vec disc_center{0.0, 8.3, -28.0};
@@ -183,6 +188,9 @@ struct SceneConfig {
     Vec glass_tint_rgb{0.05, 0.02, 0.01};
     double glass_spec_power = 96, glass_spec_intensity = 0.3;
     int glass_max_depth = 4, glass_passthrough_depth = 6;
+    int glass_cluster_min = 0, glass_cluster_max = 0;
+    double glass_size_min = 0.2, glass_size_max = 0.6;
+    double glass_spread = 0.5;
 
     // Lights
     Vec light1_pos{6, 12, -4}, light1_color{0.4, 0.6, 1.0};
@@ -248,7 +256,7 @@ struct SceneConfig {
         rcube_bound_r = std::sqrt(3.0) * rcube_half + rcube_round;
         rcube_bound_r2 = rcube_bound_r * rcube_bound_r;
         disc_r2 = disc_r * disc_r;
-        glass_max_y = tile_max_y + glass_edge;
+        glass_max_y = tile_max_y + glass_edge; // overridden by init_glass if clustering
         tile_nx = tile_hi_x - tile_lo_x + 1;
         tile_nz = tile_hi_z - tile_lo_z + 1;
         rcube_rot = make_rotation(rcube_rotation.x, rcube_rotation.y, rcube_rotation.z);
@@ -285,6 +293,12 @@ struct SceneConfig {
         rcube_half = cfg.get_double("rounded_cube.half_edge", rcube_half);
         rcube_round = cfg.get_double("rounded_cube.rounding", rcube_round);
         rcube_rotation = cfg.get_vec("rounded_cube.rotation", rcube_rotation);
+        rcube_count = cfg.get_int("rounded_cube.count", rcube_count);
+        rcube_half_min = cfg.get_double("rounded_cube.half_min", rcube_half_min);
+        rcube_half_max = cfg.get_double("rounded_cube.half_max", rcube_half_max);
+        rcube_spread = cfg.get_double("rounded_cube.spread", rcube_spread);
+        rcube_round_ratio = cfg.get_double("rounded_cube.round_ratio", rcube_round_ratio);
+        rcube_seed = cfg.get_int("rounded_cube.seed", rcube_seed);
 
         disc_center = cfg.get_vec("red_disc.center", disc_center);
         disc_normal = cfg.get_vec("red_disc.normal", disc_normal);
@@ -315,6 +329,11 @@ struct SceneConfig {
         glass_spec_intensity = cfg.get_double("glass.spec_intensity", glass_spec_intensity);
         glass_max_depth = cfg.get_int("glass.max_depth", glass_max_depth);
         glass_passthrough_depth = cfg.get_int("glass.passthrough_depth", glass_passthrough_depth);
+        glass_cluster_min = cfg.get_int("glass.cluster_min", glass_cluster_min);
+        glass_cluster_max = cfg.get_int("glass.cluster_max", glass_cluster_max);
+        glass_size_min = cfg.get_double("glass.size_min", glass_size_min);
+        glass_size_max = cfg.get_double("glass.size_max", glass_size_max);
+        glass_spread = cfg.get_double("glass.spread", glass_spread);
 
         light1_pos = cfg.get_vec("lights.light1.position", light1_pos);
         light1_color = cfg.get_vec("lights.light1.color", light1_color);
@@ -567,26 +586,139 @@ static void init_centers() {
     }
 }
 
-static inline double sdf_round_box(const Vec& p) {
-    double qx = std::max(std::abs(p.x) - SC.rcube_half, 0.0);
-    double qy = std::max(std::abs(p.y) - SC.rcube_half, 0.0);
-    double qz = std::max(std::abs(p.z) - SC.rcube_half, 0.0);
+static inline double sdf_round_box(const Vec& p, double half_edge, double rounding) {
+    double qx = std::max(std::abs(p.x) - half_edge, 0.0);
+    double qy = std::max(std::abs(p.y) - half_edge, 0.0);
+    double qz = std::max(std::abs(p.z) - half_edge, 0.0);
     double outer = std::sqrt(qx*qx + qy*qy + qz*qz);
-    double inner = std::min(std::max({std::abs(p.x) - SC.rcube_half, std::abs(p.y) - SC.rcube_half, std::abs(p.z) - SC.rcube_half}), 0.0);
-    return outer + inner - SC.rcube_round;
+    double inner = std::min(std::max({std::abs(p.x) - half_edge, std::abs(p.y) - half_edge, std::abs(p.z) - half_edge}), 0.0);
+    return outer + inner - rounding;
 }
 
-static Vec sdf_normal(const Vec& p) {
+static Vec sdf_normal(const Vec& p, double half_edge, double rounding) {
     const double eps = 0.001;
-    double dx = sdf_round_box(p + Vec(eps,0,0)) - sdf_round_box(p - Vec(eps,0,0));
-    double dy = sdf_round_box(p + Vec(0,eps,0)) - sdf_round_box(p - Vec(0,eps,0));
-    double dz = sdf_round_box(p + Vec(0,0,eps)) - sdf_round_box(p - Vec(0,0,eps));
+    double dx = sdf_round_box(p + Vec(eps,0,0), half_edge, rounding) - sdf_round_box(p - Vec(eps,0,0), half_edge, rounding);
+    double dy = sdf_round_box(p + Vec(0,eps,0), half_edge, rounding) - sdf_round_box(p - Vec(0,eps,0), half_edge, rounding);
+    double dz = sdf_round_box(p + Vec(0,0,eps), half_edge, rounding) - sdf_round_box(p - Vec(0,0,eps), half_edge, rounding);
     return Vec(dx, dy, dz).norm();
 }
 
-// Thread-local glass hit info
-struct GlassInfo { int ix, iz; double th; };
-static thread_local GlassInfo glass_hit = {0, 0, 0.0};
+// Rounded cube sub-cubes (clustered)
+struct RCubeSub {
+    Vec center;
+    double half_edge, rounding, bound_r, bound_r2;
+    Mat3 rot, rot_inv;
+};
+static std::vector<RCubeSub> rcube_subs;
+static Vec rcube_cluster_center;
+static double rcube_cluster_bound_r2;
+
+// Glass sub-cubes (clustered)
+struct GlassSub { double x0, y0, z0, x1, y1, z1; };
+static std::vector<GlassSub> glass_subs;
+struct TileGlass { int start, count; };
+static std::vector<TileGlass> tile_glass;
+
+static inline uint32_t glass_rand(uint32_t& s) {
+    s = s * 1664525u + 1013904223u;
+    return s;
+}
+static inline double glass_randf(uint32_t& s) {
+    return (glass_rand(s) & 0xFFFF) / 65535.0;
+}
+
+static void init_glass() {
+    tile_glass.resize(SC.tile_nx * SC.tile_nz);
+    bool cluster = SC.glass_cluster_min > 0 && SC.glass_cluster_max > 0;
+    double max_y = 0;
+    for (int ix = SC.tile_lo_x; ix <= SC.tile_hi_x; ix++) {
+        for (int iz = SC.tile_lo_z; iz <= SC.tile_hi_z; iz++) {
+            double th = get_tile_height(ix, iz);
+            if (th < 0) {
+                tile_glass[(ix - SC.tile_lo_x) * SC.tile_nz + (iz - SC.tile_lo_z)] = {0, 0};
+                continue;
+            }
+            int start = (int)glass_subs.size();
+            if (cluster) {
+                uint32_t seed = (uint32_t)(ix * 374761393u + iz * 668265263u + 12345u);
+                int range = SC.glass_cluster_max - SC.glass_cluster_min + 1;
+                int count = SC.glass_cluster_min + (int)(glass_rand(seed) % range);
+                for (int k = 0; k < count; k++) {
+                    double size = SC.glass_size_min + glass_randf(seed) * (SC.glass_size_max - SC.glass_size_min);
+                    double hs = size * 0.5;
+                    double cx = ix + 0.5 + (glass_randf(seed) * 2.0 - 1.0) * SC.glass_spread;
+                    double cz = iz + 0.5 + (glass_randf(seed) * 2.0 - 1.0) * SC.glass_spread;
+                    double y1 = th + size;
+                    if (y1 > max_y) max_y = y1;
+                    glass_subs.push_back({cx - hs, th, cz - hs, cx + hs, y1, cz + hs});
+                }
+                tile_glass[(ix - SC.tile_lo_x) * SC.tile_nz + (iz - SC.tile_lo_z)] = {start, count};
+            } else {
+                double y1 = th + SC.glass_edge;
+                if (y1 > max_y) max_y = y1;
+                glass_subs.push_back({ix - 0.1, th, iz - 0.1, ix + 1.1, y1, iz + 1.1});
+                tile_glass[(ix - SC.tile_lo_x) * SC.tile_nz + (iz - SC.tile_lo_z)] = {start, 1};
+            }
+        }
+    }
+    SC.glass_max_y = max_y;
+}
+
+static inline uint32_t rcube_rand(uint32_t& s) {
+    s = s * 1664525u + 1013904223u;
+    return s;
+}
+static inline double rcube_randf(uint32_t& s) {
+    return (rcube_rand(s) & 0xFFFF) / 65535.0;
+}
+
+static void init_rcubes() {
+    rcube_subs.clear();
+    if (SC.rcube_count <= 1) {
+        RCubeSub sub;
+        sub.center = SC.rcube_center;
+        sub.half_edge = SC.rcube_half;
+        sub.rounding = SC.rcube_round;
+        sub.bound_r = std::sqrt(3.0) * sub.half_edge + sub.rounding;
+        sub.bound_r2 = sub.bound_r * sub.bound_r;
+        sub.rot = SC.rcube_rot;
+        sub.rot_inv = SC.rcube_rot_inv;
+        rcube_subs.push_back(sub);
+        rcube_cluster_center = SC.rcube_center;
+        rcube_cluster_bound_r2 = sub.bound_r2;
+        return;
+    }
+    uint32_t seed = (uint32_t)SC.rcube_seed;
+    double max_reach = 0;
+    for (int i = 0; i < SC.rcube_count; i++) {
+        RCubeSub sub;
+        sub.half_edge = SC.rcube_half_min + rcube_randf(seed) * (SC.rcube_half_max - SC.rcube_half_min);
+        sub.rounding = sub.half_edge * SC.rcube_round_ratio;
+        sub.bound_r = std::sqrt(3.0) * sub.half_edge + sub.rounding;
+        sub.bound_r2 = sub.bound_r * sub.bound_r;
+        // Random direction (uniform on sphere) and random distance
+        double theta = rcube_randf(seed) * 2.0 * M_PI;
+        double cos_phi = rcube_randf(seed) * 2.0 - 1.0;
+        double sin_phi = std::sqrt(1.0 - cos_phi * cos_phi);
+        double dist = rcube_randf(seed) * SC.rcube_spread;
+        Vec offset(sin_phi * std::cos(theta) * dist,
+                   sin_phi * std::sin(theta) * dist,
+                   cos_phi * dist);
+        sub.center = SC.rcube_center + offset;
+        double reach = offset.len() + sub.bound_r;
+        if (reach > max_reach) max_reach = reach;
+        // Use original cube orientation for all sub-cubes
+        sub.rot = SC.rcube_rot;
+        sub.rot_inv = SC.rcube_rot_inv;
+        rcube_subs.push_back(sub);
+    }
+    rcube_cluster_center = SC.rcube_center;
+    rcube_cluster_bound_r2 = max_reach * max_reach;
+}
+
+// Thread-local glass hit info — stores actual AABB bounds
+struct GlassInfo { double x0, y0, z0, x1, y1, z1; };
+static thread_local GlassInfo glass_hit = {0, 0, 0, 0, 0, 0};
 
 // Thread-local sphere index for scratch perturbation
 static thread_local int hit_sphere_idx = 0;
@@ -678,13 +810,18 @@ static HitResult test(const Vec& o, const Vec& d, bool skip_tiles = false) {
                         m = ((ix + 100) + (iz + 100)) % 2 ? 1 : 2;
                     }
 
-                    // Glass cube AABB
-                    double gt; Vec gn;
-                    if (aabb_test(ox, oy, oz, dx, dy, dz,
-                                  ix - 0.1, ix + 1.1, th, th + SC.glass_edge, iz - 0.1, iz + 1.1,
-                                  has_dx, inv_dx, inv_dy, has_dz, inv_dz, t, gt, gn)) {
-                        t = gt; n = gn; m = 4;
-                        glass_hit = {ix, iz, th};
+                    // Glass sub-cubes
+                    int ti = (ix - SC.tile_lo_x) * SC.tile_nz + (iz - SC.tile_lo_z);
+                    auto& tg = tile_glass[ti];
+                    for (int gi = tg.start; gi < tg.start + tg.count; gi++) {
+                        auto& gs = glass_subs[gi];
+                        double gt; Vec gn;
+                        if (aabb_test(ox, oy, oz, dx, dy, dz,
+                                      gs.x0, gs.x1, gs.y0, gs.y1, gs.z0, gs.z1,
+                                      has_dx, inv_dx, inv_dy, has_dz, inv_dz, t, gt, gn)) {
+                            t = gt; n = gn; m = 4;
+                            glass_hit = {gs.x0, gs.y0, gs.z0, gs.x1, gs.y1, gs.z1};
+                        }
                     }
                 }
             }
@@ -710,32 +847,41 @@ static HitResult test(const Vec& o, const Vec& d, bool skip_tiles = false) {
         }
     }
 
-    // Rounded reflective cube (SDF ray march)
+    // Rounded reflective cubes (SDF ray march, clustered)
     {
-        double px = ox - SC.rcube_center.x, py = oy - SC.rcube_center.y, pz = oz - SC.rcube_center.z;
-        double b = px*dx + py*dy + pz*dz;
-        double disc = b*b - (px*px + py*py + pz*pz - SC.rcube_bound_r2);
-        if (disc >= 0) {
-            double sq = std::sqrt(disc);
-            double t_near = -b - sq;
-            double t_far = -b + sq;
-            if (t_far > 0.01 && t_near < t) {
-                Vec local_o = SC.rcube_rot.mul(Vec(ox, oy, oz) - SC.rcube_center);
-                Vec local_d = SC.rcube_rot.mul(Vec(dx, dy, dz));
-                double tt = std::max(t_near, 0.01);
-                for (int step = 0; step < 64; step++) {
-                    Vec lp = local_o + local_d * tt;
-                    double dist = sdf_round_box(lp);
-                    if (dist < 0.001) {
-                        if (tt < t) {
-                            t = tt;
-                            n = SC.rcube_rot_inv.mul(sdf_normal(lp));
-                            m = 5;
+        double cpx = ox - rcube_cluster_center.x, cpy = oy - rcube_cluster_center.y, cpz = oz - rcube_cluster_center.z;
+        double cb = cpx*dx + cpy*dy + cpz*dz;
+        double cdisc = cb*cb - (cpx*cpx + cpy*cpy + cpz*cpz - rcube_cluster_bound_r2);
+        if (cdisc >= 0) {
+            double csq = std::sqrt(cdisc);
+            double ct_far = -cb + csq;
+            if (ct_far > 0.01) {
+                for (const auto& sub : rcube_subs) {
+                    double spx = ox - sub.center.x, spy = oy - sub.center.y, spz = oz - sub.center.z;
+                    double sb = spx*dx + spy*dy + spz*dz;
+                    double sdisc = sb*sb - (spx*spx + spy*spy + spz*spz - sub.bound_r2);
+                    if (sdisc < 0) continue;
+                    double ssq = std::sqrt(sdisc);
+                    double t_near = -sb - ssq;
+                    double t_far = -sb + ssq;
+                    if (t_far <= 0.01 || t_near >= t) continue;
+                    Vec local_o = sub.rot.mul(Vec(ox, oy, oz) - sub.center);
+                    Vec local_d = sub.rot.mul(Vec(dx, dy, dz));
+                    double tt = std::max(t_near, 0.01);
+                    for (int step = 0; step < 64; step++) {
+                        Vec lp = local_o + local_d * tt;
+                        double dist = sdf_round_box(lp, sub.half_edge, sub.rounding);
+                        if (dist < 0.001) {
+                            if (tt < t) {
+                                t = tt;
+                                n = sub.rot_inv.mul(sdf_normal(lp, sub.half_edge, sub.rounding));
+                                m = 5;
+                            }
+                            break;
                         }
-                        break;
+                        tt += dist;
+                        if (tt > std::min(t_far, t)) break;
                     }
-                    tt += dist;
-                    if (tt > std::min(t_far, t)) break;
                 }
             }
         }
@@ -836,9 +982,9 @@ static Vec trace(const Vec& o, const Vec& d, int depth) {
         if (k > 0) {
             Vec refr = d * eta + nn * (eta * cos_i - std::sqrt(k));
             auto gi = glass_hit;
-            double gx0 = gi.ix - 0.1, gx1 = gi.ix + 1.1;
-            double gy0 = gi.th, gy1 = gi.th + SC.glass_edge;
-            double gz0 = gi.iz - 0.1, gz1 = gi.iz + 1.1;
+            double gx0 = gi.x0, gx1 = gi.x1;
+            double gy0 = gi.y0, gy1 = gi.y1;
+            double gz0 = gi.z0, gz1 = gi.z1;
             Vec entry_pt = hit + refr * 0.02;
             double rx = refr.x, ry = refr.y, rz = refr.z;
             double exit_t = 1e9;
@@ -1069,13 +1215,19 @@ int main(int argc, char* argv[]) {
     printf("Loaded scene: %s\n", scene_file);
 
     init_tiles();
+    init_glass();
+    init_rcubes();
     init_centers();
 
     int W = SC.width, H = SC.height;
     printf("nanore ray tracer\n");
     printf("  Resolution: %dx%d, %d samples/pixel\n", W, H, SC.samples);
     printf("  %zu spheres (r=%.1f), %d displaced cubes + glass\n", centers.size(), SC.sph_r, SC.tile_nx * SC.tile_nz);
-    printf("  Rounded reflective cube (edge=%.0f, round=%.1f) behind text\n", SC.rcube_half * 2, SC.rcube_round);
+    if (SC.rcube_count > 1)
+        printf("  %d rounded reflective sub-cubes (edge %.1f-%.1f, spread=%.1f)\n",
+               SC.rcube_count, SC.rcube_half_min * 2, SC.rcube_half_max * 2, SC.rcube_spread);
+    else
+        printf("  Rounded reflective cube (edge=%.0f, round=%.1f) behind text\n", SC.rcube_half * 2, SC.rcube_round);
     printf("  Blue + yellow dual lighting, shiny floor\n");
     fflush(stdout);
 
