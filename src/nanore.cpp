@@ -1439,6 +1439,7 @@ int main(int argc, char* argv[]) {
 
     auto* pixels = new uint8_t[W * H * 3];
     auto* hdr = new float[W * H * 3];
+    auto* zbuf = new float[W * H];
 
     int num_threads = std::max(1, (int)std::thread::hardware_concurrency());
     printf("  Using %d threads\n", num_threads);
@@ -1455,6 +1456,7 @@ int main(int argc, char* argv[]) {
             if (y >= H) break;
             for (int x = 0; x < W; x++) {
                 Vec color;
+                double depth_sum = 0;
                 for (int s = 0; s < SC.samples; s++) {
                     double dx = (x + randf() - W / 2.0) / H;
                     double dy = (H / 2.0 - y + randf()) / H;
@@ -1464,12 +1466,14 @@ int main(int argc, char* argv[]) {
                     double fog_dist = (hm == 0) ? SC.fog_max_dist : ht;
                     c = apply_fog(SC.cam, dir, fog_dist, c);
                     color = color + c;
+                    depth_sum += (hm == 0) ? SC.fog_max_dist : ht;
                 }
                 color = color * (1.0 / SC.samples);
                 int idx = (y * W + x) * 3;
                 hdr[idx]   = (float)color.x;
                 hdr[idx+1] = (float)color.y;
                 hdr[idx+2] = (float)color.z;
+                zbuf[y * W + x] = (float)(depth_sum / SC.samples);
             }
             int done = rows_done.fetch_add(1) + 1;
             if (done % 32 == 0) {
@@ -1604,6 +1608,55 @@ int main(int argc, char* argv[]) {
         printf("  Saved to renders/latest.bmp\n");
     }
 
+    // Z-buffer: find min/max depth for normalization
+    float zmin = zbuf[0], zmax = zbuf[0];
+    for (int i = 1; i < W * H; i++) {
+        if (zbuf[i] < zmin) zmin = zbuf[i];
+        if (zbuf[i] > zmax) zmax = zbuf[i];
+    }
+    float zrange = (zmax - zmin > 1e-6f) ? (zmax - zmin) : 1.0f;
+
+    // Write z-buffer as grayscale BMP
+    auto write_zbmp = [&](const char* path) {
+        FILE* zf = fopen(path, "wb");
+        if (!zf) return;
+        int zrow = W * 3;
+        int zpad = (4 - zrow % 4) % 4;
+        int zimg = (zrow + zpad) * H;
+        uint8_t zh[54] = {};
+        zh[0] = 'B'; zh[1] = 'M';
+        *(uint32_t*)(zh + 2) = 54 + zimg;
+        *(uint32_t*)(zh + 10) = 54;
+        *(uint32_t*)(zh + 14) = 40;
+        *(int32_t*)(zh + 18) = W;
+        *(int32_t*)(zh + 22) = H;
+        *(uint16_t*)(zh + 26) = 1;
+        *(uint16_t*)(zh + 28) = 24;
+        *(uint32_t*)(zh + 34) = zimg;
+        *(int32_t*)(zh + 38) = 2835;
+        *(int32_t*)(zh + 42) = 2835;
+        fwrite(zh, 1, 54, zf);
+        uint8_t zpadding[4] = {};
+        for (int y = H - 1; y >= 0; y--) {
+            for (int x = 0; x < W; x++) {
+                float norm = (zbuf[y * W + x] - zmin) / zrange;
+                uint8_t v = (uint8_t)(std::clamp(1.0f - norm, 0.0f, 1.0f) * 255.0f);
+                uint8_t gray[3] = {v, v, v};
+                fwrite(gray, 1, 3, zf);
+            }
+            if (zpad) fwrite(zpadding, 1, zpad, zf);
+        }
+        fclose(zf);
+        printf("  Saved to %s\n", path);
+    };
+
+    // Build z-buffer output path
+    char zpath[256];
+    strftime(zpath, sizeof(zpath), "renders/render-%Y%m%d-%H%M%S_z.bmp", t);
+    write_zbmp(zpath);
+    write_zbmp("renders/latest_z.bmp");
+
+    delete[] zbuf;
     delete[] hdr;
     delete[] pixels;
     return 0;
