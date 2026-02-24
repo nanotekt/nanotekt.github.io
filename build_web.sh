@@ -18,6 +18,7 @@ em++ src/nanore.cpp \
   -o dist/nanore.js
 
 cp web/coi-serviceworker.js dist/
+cp web/preview.png dist/
 
 echo "Embedding default scene YAML into index.html..."
 
