@@ -4,7 +4,8 @@
       "Bash(python3:*)",
       "Bash(./raytracer:*)",
       "Bash(./build.sh:*)",
-      "Bash(./render.sh:*)"
+      "Bash(./render.sh:*)",
+      "Bash(./nanore:*)"
     ]
   }
 }
