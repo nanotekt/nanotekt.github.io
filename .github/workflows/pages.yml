@@ -1,0 +1,70 @@
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container: emscripten/emsdk:latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build WebAssembly
+        run: |
+          mkdir -p dist
+          em++ src/nanore.cpp \
+            -O2 \
+            -std=c++17 \
+            -pthread \
+            -sALLOW_MEMORY_GROWTH=1 \
+            -sINITIAL_MEMORY=134217728 \
+            -sPTHREAD_POOL_SIZE='navigator.hardwareConcurrency+1' \
+            -sEXPORTED_FUNCTIONS='["_main","_start_render","_cancel_render","_is_render_done","_get_render_result","_get_progress","_get_pixels_ptr","_get_zbuf_ptr","_get_width","_get_height","_malloc","_free"]' \
+            -sEXPORTED_RUNTIME_METHODS='["ccall","cwrap","stringToUTF8","lengthBytesUTF8"]' \
+            -sENVIRONMENT=web,worker \
+            -o dist/nanore.js
+
+      - name: Embed default scene
+        run: |
+          python3 -c "
+          with open('scenes/nanotekt.yaml', 'r') as f:
+              yaml = f.read()
+          with open('web/index.html', 'r') as f:
+              html = f.read()
+          html = html.replace('__DEFAULT_YAML__', yaml.rstrip())
+          with open('dist/index.html', 'w') as f:
+              f.write(html)
+          "
+
+      - name: Add COOP/COEP headers
+        run: |
+          cat > dist/_headers <<'EOF'
+          /*
+            Cross-Origin-Opener-Policy: same-origin
+            Cross-Origin-Embedder-Policy: require-corp
+          EOF
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
