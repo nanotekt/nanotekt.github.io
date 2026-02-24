@@ -1,4 +1,4 @@
-version: nanore@1
+version: nanore@2
 
 rendering:
   width: 1024
@@ -10,69 +10,70 @@ camera:
   position: [0, 3.5, 14]
   target: [0, 3, -12]
 
-text:
-  bitmap:
-    0: .@@@...@@@@...@@@@.
-    1: @...@..@...@..@...@
-    2: @...@..@@@@...@...@
-    3: @...@..@...@..@...@
-    4: @...@..@...@..@...@
-    5: .@@@...@@@@...@@@@.
-  sphere_radius: 1.0
-  x_offset: -8.5
-  y_base: 8.8
-  y_spacing: 1.0
-  z_depth: -12.0
-  slash_x_base: -6.5
-  slash_y_base: 6.3
-  slash_count: 7
-
-rounded_cube:
-  center: [0.0, 8.3, -20.0]
-  half_edge: 4.0
-  rounding: 0.75
-  rotation: [0.45, 0.65, 0.3]
-
-red_disc:
-  center: [0.0, 8.3, -28.0]
-  normal: [0.0, 0.0, 1.0]
-  radius: 12.0
-  emissive_color: [4.0, 0.04, 0.04]
-
-floor:
-  bounds_x: [-15, 15]
-  bounds_z: [-25, 15]
-  max_height: 1.25
-  white_color: [0.95, 0.95, 0.95]
-  red_color: [0.85, 0.08, 0.08]
-  diffuse: 0.5
-  ambient: 0.12
-  reflect_base: 0.7
-  reflect_mirror: 0.3
-  max_depth: 2
-  spec_power: 48
-  spec_intensity: 0.4
-
-glass:
-  edge: 1.2
-  ior: 1.5
-  fresnel_r0: 0.04
-  tint_scale: 0.15
-  tint_rgb: [0.05, 0.02, 0.01]
-  spec_power: 96
-  spec_intensity: 0.3
-  max_depth: 4
-  passthrough_depth: 6
-
-lights:
-  light1:
+objects:
+  qbd:
+    type: bitmap_text
+    bitmap:
+      0: .@@@...@@@@...@@@@.
+      1: @...@..@...@..@...@
+      2: @...@..@@@@...@...@
+      3: @...@..@...@..@...@
+      4: @...@..@...@..@...@
+      5: .@@@...@@@@...@@@@.
+    sphere_radius: 1.0
+    x_offset: -8.5
+    y_base: 8.8
+    y_spacing: 1.0
+    z_depth: -12.0
+    slash_x_base: -6.5
+    slash_y_base: 6.3
+    slash_count: 7
+  chrome_cube:
+    type: rounded_cube
+    center: [0.0, 8.3, -20.0]
+    half_edge: 4.0
+    rounding: 0.75
+    rotation: [0.45, 0.65, 0.3]
+  backdrop:
+    type: disc
+    center: [0.0, 8.3, -28.0]
+    normal: [0.0, 0.0, 1.0]
+    radius: 12.0
+    emissive_color: [4.0, 0.04, 0.04]
+    light_color: [2.0, 0.04, 0.04]
+  floor:
+    type: floor
+    bounds_x: [-15, 15]
+    bounds_z: [-25, 15]
+    max_height: 1.25
+    white_color: [0.95, 0.95, 0.95]
+    red_color: [0.85, 0.08, 0.08]
+    diffuse: 0.5
+    ambient: 0.12
+    reflect_base: 0.7
+    reflect_mirror: 0.3
+    max_depth: 2
+    spec_power: 48
+    spec_intensity: 0.4
+  glass:
+    type: glass
+    edge: 1.2
+    ior: 1.5
+    fresnel_r0: 0.04
+    tint_scale: 0.15
+    tint_rgb: [0.05, 0.02, 0.01]
+    spec_power: 96
+    spec_intensity: 0.3
+    max_depth: 4
+    passthrough_depth: 6
+  key_light:
+    type: light
     position: [6, 12, -4]
     color: [0.4, 0.6, 1.0]
-  light2:
+  fill_light:
+    type: light
     position: [-6, 12, 4]
     color: [1.0, 0.9, 0.3]
-  light3_color: [2.0, 0.04, 0.04]
-  shadow_ambient: 0.15
 
 materials:
   chrome:
@@ -95,46 +96,47 @@ materials:
     max_depth: 3
     spec_power: 32
     spec_intensity: 0.5
+  scratches:
+    uv_scale: 8.0
+    layer1:
+      frequency: 12.0
+      power: 4.0
+      intensity: 0.35
+    layer2:
+      angle_offset: 1.0
+      frequency: 20.0
+      phase_mult: 1.7
+      power: 5.0
+      intensity: 0.2
+    layer3:
+      angle_offset: 2.3
+      frequency: 30.0
+      phase_mult: 0.6
+      power: 6.0
+      intensity: 0.12
 
-scratches:
-  uv_scale: 8.0
-  layer1:
-    frequency: 12.0
-    power: 4.0
-    intensity: 0.35
-  layer2:
-    angle_offset: 1.0
-    frequency: 20.0
-    phase_mult: 1.7
-    power: 5.0
-    intensity: 0.2
-  layer3:
-    angle_offset: 2.3
-    frequency: 30.0
-    phase_mult: 0.6
-    power: 6.0
-    intensity: 0.12
+environment:
+  shadow_ambient: 0.15
+  sky:
+    base_color: [0, 0, 0]
+    horizon_threshold: 0.005
+    ceiling_height: 35.0
+    grid_spacing: 10.0
+    glow_width: 0.6
+    fade_rate: 0.015
+    neon_color: [1.2, 0.2, 0.6]
+    neon_intensity: 1.8
+  fog:
+    density: 0.015
+    steps: 32
+    noise_x: 0.03
+    noise_xz: 0.015
+    noise_y: 0.05
+    noise_z: 0.04
 
-sky:
-  base_color: [0, 0, 0]
-  horizon_threshold: 0.005
-  ceiling_height: 35.0
-  grid_spacing: 10.0
-  glow_width: 0.6
-  fade_rate: 0.015
-  neon_color: [1.2, 0.2, 0.6]
-  neon_intensity: 1.8
-
-fog:
-  density: 0.015
-  steps: 32
-  noise_x: 0.03
-  noise_xz: 0.015
-  noise_y: 0.05
-  noise_z: 0.04
-
-bloom:
-  radius: 20
-  threshold: 0.8
-  intensity: 0.6
-  gamma: 0.45
+post_processing:
+  bloom:
+    radius: 20
+    threshold: 0.8
+    intensity: 0.6
+    gamma: 0.45

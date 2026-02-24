@@ -99,19 +99,19 @@ struct YamlConfig {
         return true;
     }
 
-    int get_int(const char* key, int def) const {
+    int get_int(const std::string& key, int def) const {
         auto it = data.find(key);
         if (it == data.end()) return def;
         return (int)std::strtol(it->second.c_str(), nullptr, 10);
     }
 
-    double get_double(const char* key, double def) const {
+    double get_double(const std::string& key, double def) const {
         auto it = data.find(key);
         if (it == data.end()) return def;
         return std::strtod(it->second.c_str(), nullptr);
     }
 
-    Vec get_vec(const char* key, Vec def) const {
+    Vec get_vec(const std::string& key, Vec def) const {
         auto it = data.find(key);
         if (it == data.end()) return def;
         double x, y, z;
@@ -122,7 +122,7 @@ struct YamlConfig {
         return def;
     }
 
-    std::string get_string(const char* key, const std::string& def = "") const {
+    std::string get_string(const std::string& key, const std::string& def = "") const {
         auto it = data.find(key);
         if (it == data.end()) return def;
         return it->second;
@@ -137,6 +137,24 @@ struct YamlConfig {
             out[i] = (int)strtol(p, (char**)&p, 10);
             while (*p == ',' || *p == ' ') p++;
         }
+    }
+
+    std::vector<std::string> get_keys_under(const std::string& prefix) const {
+        std::vector<std::string> result;
+        std::string pfx = prefix + ".";
+        std::string last;
+        for (const auto& kv : data) {
+            if (kv.first.compare(0, pfx.size(), pfx) != 0) continue;
+            size_t dot = kv.first.find('.', pfx.size());
+            std::string child = (dot != std::string::npos)
+                ? kv.first.substr(pfx.size(), dot - pfx.size())
+                : kv.first.substr(pfx.size());
+            if (child != last) {
+                result.push_back(child);
+                last = child;
+            }
+        }
+        return result;
     }
 };
 
@@ -264,84 +282,103 @@ struct SceneConfig {
     }
 
     void load_from_yaml(const YamlConfig& cfg) {
+        // Rendering
         width = cfg.get_int("rendering.width", width);
         height = cfg.get_int("rendering.height", height);
         samples = cfg.get_int("rendering.samples", samples);
         fog_max_dist = cfg.get_double("rendering.fog_max_dist", fog_max_dist);
 
+        // Camera
         cam = cfg.get_vec("camera.position", cam);
         target = cfg.get_vec("camera.target", target);
 
-        bitmap_rows.clear();
-        for (int i = 0; ; i++) {
-            char key[64];
-            snprintf(key, sizeof(key), "text.bitmap.%d", i);
-            std::string row = cfg.get_string(key);
-            if (row.empty()) break;
-            bitmap_rows.push_back(row);
+        // Objects
+        int light_idx = 0;
+        text_blocks.clear();
+        for (const auto& name : cfg.get_keys_under("objects")) {
+            std::string p = "objects." + name + ".";
+            std::string type = cfg.get_string(p + "type");
+
+            if (type == "bitmap_text") {
+                bitmap_rows.clear();
+                for (int i = 0; ; i++) {
+                    std::string row = cfg.get_string(p + "bitmap." + std::to_string(i));
+                    if (row.empty()) break;
+                    bitmap_rows.push_back(row);
+                }
+                sph_r = cfg.get_double(p + "sphere_radius", sph_r);
+                text_x_offset = cfg.get_double(p + "x_offset", text_x_offset);
+                text_y_base = cfg.get_double(p + "y_base", text_y_base);
+                text_y_spacing = cfg.get_double(p + "y_spacing", text_y_spacing);
+                text_z = cfg.get_double(p + "z_depth", text_z);
+                slash_x_base = cfg.get_double(p + "slash_x_base", slash_x_base);
+                slash_y_base = cfg.get_double(p + "slash_y_base", slash_y_base);
+                slash_count = cfg.get_int(p + "slash_count", slash_count);
+            } else if (type == "rounded_cube") {
+                rcube_center = cfg.get_vec(p + "center", rcube_center);
+                rcube_half = cfg.get_double(p + "half_edge", rcube_half);
+                rcube_round = cfg.get_double(p + "rounding", rcube_round);
+                rcube_rotation = cfg.get_vec(p + "rotation", rcube_rotation);
+                rcube_count = cfg.get_int(p + "count", rcube_count);
+                rcube_half_min = cfg.get_double(p + "half_min", rcube_half_min);
+                rcube_half_max = cfg.get_double(p + "half_max", rcube_half_max);
+                rcube_spread = cfg.get_double(p + "spread", rcube_spread);
+                rcube_round_ratio = cfg.get_double(p + "round_ratio", rcube_round_ratio);
+                rcube_seed = cfg.get_int(p + "seed", rcube_seed);
+            } else if (type == "disc") {
+                disc_center = cfg.get_vec(p + "center", disc_center);
+                disc_normal = cfg.get_vec(p + "normal", disc_normal);
+                disc_r = cfg.get_double(p + "radius", disc_r);
+                disc_emissive = cfg.get_vec(p + "emissive_color", disc_emissive);
+                light3_color = cfg.get_vec(p + "light_color", light3_color);
+            } else if (type == "floor") {
+                Vec bx = cfg.get_vec(p + "bounds_x", Vec(tile_lo_x, tile_hi_x, 0));
+                tile_lo_x = (int)bx.x; tile_hi_x = (int)bx.y;
+                Vec bz = cfg.get_vec(p + "bounds_z", Vec(tile_lo_z, tile_hi_z, 0));
+                tile_lo_z = (int)bz.x; tile_hi_z = (int)bz.y;
+                tile_max_y = cfg.get_double(p + "max_height", tile_max_y);
+                floor_white = cfg.get_vec(p + "white_color", floor_white);
+                floor_red = cfg.get_vec(p + "red_color", floor_red);
+                floor_diffuse = cfg.get_double(p + "diffuse", floor_diffuse);
+                floor_ambient = cfg.get_double(p + "ambient", floor_ambient);
+                floor_refl_base = cfg.get_double(p + "reflect_base", floor_refl_base);
+                floor_refl_mirror = cfg.get_double(p + "reflect_mirror", floor_refl_mirror);
+                floor_max_depth = cfg.get_int(p + "max_depth", floor_max_depth);
+                floor_spec_power = cfg.get_double(p + "spec_power", floor_spec_power);
+                floor_spec_intensity = cfg.get_double(p + "spec_intensity", floor_spec_intensity);
+            } else if (type == "glass") {
+                glass_edge = cfg.get_double(p + "edge", glass_edge);
+                glass_ior = cfg.get_double(p + "ior", glass_ior);
+                glass_r0 = cfg.get_double(p + "fresnel_r0", glass_r0);
+                glass_tint_scale = cfg.get_double(p + "tint_scale", glass_tint_scale);
+                glass_tint_rgb = cfg.get_vec(p + "tint_rgb", glass_tint_rgb);
+                glass_spec_power = cfg.get_double(p + "spec_power", glass_spec_power);
+                glass_spec_intensity = cfg.get_double(p + "spec_intensity", glass_spec_intensity);
+                glass_max_depth = cfg.get_int(p + "max_depth", glass_max_depth);
+                glass_passthrough_depth = cfg.get_int(p + "passthrough_depth", glass_passthrough_depth);
+                glass_cluster_min = cfg.get_int(p + "cluster_min", glass_cluster_min);
+                glass_cluster_max = cfg.get_int(p + "cluster_max", glass_cluster_max);
+                glass_size_min = cfg.get_double(p + "size_min", glass_size_min);
+                glass_size_max = cfg.get_double(p + "size_max", glass_size_max);
+                glass_spread = cfg.get_double(p + "spread", glass_spread);
+            } else if (type == "light") {
+                Vec pos = cfg.get_vec(p + "position", Vec());
+                Vec col = cfg.get_vec(p + "color", Vec());
+                if (light_idx == 0) { light1_pos = pos; light1_color = col; }
+                else if (light_idx == 1) { light2_pos = pos; light2_color = col; }
+                light_idx++;
+            } else if (type == "text") {
+                TextBlock tb;
+                tb.content = cfg.get_string(p + "string");
+                Vec pos = cfg.get_vec(p + "position", Vec(0, 0, 0));
+                tb.x = pos.x; tb.y = pos.y; tb.z = pos.z;
+                tb.col_spacing = cfg.get_double(p + "col_spacing", 1.0);
+                tb.row_spacing = cfg.get_double(p + "row_spacing", 1.0);
+                text_blocks.push_back(tb);
+            }
         }
-        sph_r = cfg.get_double("text.sphere_radius", sph_r);
-        text_x_offset = cfg.get_double("text.x_offset", text_x_offset);
-        text_y_base = cfg.get_double("text.y_base", text_y_base);
-        text_y_spacing = cfg.get_double("text.y_spacing", text_y_spacing);
-        text_z = cfg.get_double("text.z_depth", text_z);
-        slash_x_base = cfg.get_double("text.slash_x_base", slash_x_base);
-        slash_y_base = cfg.get_double("text.slash_y_base", slash_y_base);
-        slash_count = cfg.get_int("text.slash_count", slash_count);
 
-        rcube_center = cfg.get_vec("rounded_cube.center", rcube_center);
-        rcube_half = cfg.get_double("rounded_cube.half_edge", rcube_half);
-        rcube_round = cfg.get_double("rounded_cube.rounding", rcube_round);
-        rcube_rotation = cfg.get_vec("rounded_cube.rotation", rcube_rotation);
-        rcube_count = cfg.get_int("rounded_cube.count", rcube_count);
-        rcube_half_min = cfg.get_double("rounded_cube.half_min", rcube_half_min);
-        rcube_half_max = cfg.get_double("rounded_cube.half_max", rcube_half_max);
-        rcube_spread = cfg.get_double("rounded_cube.spread", rcube_spread);
-        rcube_round_ratio = cfg.get_double("rounded_cube.round_ratio", rcube_round_ratio);
-        rcube_seed = cfg.get_int("rounded_cube.seed", rcube_seed);
-
-        disc_center = cfg.get_vec("red_disc.center", disc_center);
-        disc_normal = cfg.get_vec("red_disc.normal", disc_normal);
-        disc_r = cfg.get_double("red_disc.radius", disc_r);
-        disc_emissive = cfg.get_vec("red_disc.emissive_color", disc_emissive);
-
-        Vec bx = cfg.get_vec("floor.bounds_x", Vec(tile_lo_x, tile_hi_x, 0));
-        tile_lo_x = (int)bx.x; tile_hi_x = (int)bx.y;
-        Vec bz = cfg.get_vec("floor.bounds_z", Vec(tile_lo_z, tile_hi_z, 0));
-        tile_lo_z = (int)bz.x; tile_hi_z = (int)bz.y;
-        tile_max_y = cfg.get_double("floor.max_height", tile_max_y);
-        floor_white = cfg.get_vec("floor.white_color", floor_white);
-        floor_red = cfg.get_vec("floor.red_color", floor_red);
-        floor_diffuse = cfg.get_double("floor.diffuse", floor_diffuse);
-        floor_ambient = cfg.get_double("floor.ambient", floor_ambient);
-        floor_refl_base = cfg.get_double("floor.reflect_base", floor_refl_base);
-        floor_refl_mirror = cfg.get_double("floor.reflect_mirror", floor_refl_mirror);
-        floor_max_depth = cfg.get_int("floor.max_depth", floor_max_depth);
-        floor_spec_power = cfg.get_double("floor.spec_power", floor_spec_power);
-        floor_spec_intensity = cfg.get_double("floor.spec_intensity", floor_spec_intensity);
-
-        glass_edge = cfg.get_double("glass.edge", glass_edge);
-        glass_ior = cfg.get_double("glass.ior", glass_ior);
-        glass_r0 = cfg.get_double("glass.fresnel_r0", glass_r0);
-        glass_tint_scale = cfg.get_double("glass.tint_scale", glass_tint_scale);
-        glass_tint_rgb = cfg.get_vec("glass.tint_rgb", glass_tint_rgb);
-        glass_spec_power = cfg.get_double("glass.spec_power", glass_spec_power);
-        glass_spec_intensity = cfg.get_double("glass.spec_intensity", glass_spec_intensity);
-        glass_max_depth = cfg.get_int("glass.max_depth", glass_max_depth);
-        glass_passthrough_depth = cfg.get_int("glass.passthrough_depth", glass_passthrough_depth);
-        glass_cluster_min = cfg.get_int("glass.cluster_min", glass_cluster_min);
-        glass_cluster_max = cfg.get_int("glass.cluster_max", glass_cluster_max);
-        glass_size_min = cfg.get_double("glass.size_min", glass_size_min);
-        glass_size_max = cfg.get_double("glass.size_max", glass_size_max);
-        glass_spread = cfg.get_double("glass.spread", glass_spread);
-
-        light1_pos = cfg.get_vec("lights.light1.position", light1_pos);
-        light1_color = cfg.get_vec("lights.light1.color", light1_color);
-        light2_pos = cfg.get_vec("lights.light2.position", light2_pos);
-        light2_color = cfg.get_vec("lights.light2.color", light2_color);
-        light3_color = cfg.get_vec("lights.light3_color", light3_color);
-        shadow_ambient = cfg.get_double("lights.shadow_ambient", shadow_ambient);
-
+        // Materials
         chrome_color = cfg.get_vec("materials.chrome.color", chrome_color);
         chrome_diffuse = cfg.get_double("materials.chrome.diffuse", chrome_diffuse);
         chrome_ambient = cfg.get_double("materials.chrome.ambient", chrome_ambient);
@@ -362,62 +399,43 @@ struct SceneConfig {
         silver_spec_power = cfg.get_double("materials.silver.spec_power", silver_spec_power);
         silver_spec_intensity = cfg.get_double("materials.silver.spec_intensity", silver_spec_intensity);
 
-        scratch_uv = cfg.get_double("scratches.uv_scale", scratch_uv);
-        s1_freq = cfg.get_double("scratches.layer1.frequency", s1_freq);
-        s1_power = cfg.get_double("scratches.layer1.power", s1_power);
-        s1_intensity = cfg.get_double("scratches.layer1.intensity", s1_intensity);
-        s2_angle = cfg.get_double("scratches.layer2.angle_offset", s2_angle);
-        s2_freq = cfg.get_double("scratches.layer2.frequency", s2_freq);
-        s2_phase = cfg.get_double("scratches.layer2.phase_mult", s2_phase);
-        s2_power = cfg.get_double("scratches.layer2.power", s2_power);
-        s2_intensity = cfg.get_double("scratches.layer2.intensity", s2_intensity);
-        s3_angle = cfg.get_double("scratches.layer3.angle_offset", s3_angle);
-        s3_freq = cfg.get_double("scratches.layer3.frequency", s3_freq);
-        s3_phase = cfg.get_double("scratches.layer3.phase_mult", s3_phase);
-        s3_power = cfg.get_double("scratches.layer3.power", s3_power);
-        s3_intensity = cfg.get_double("scratches.layer3.intensity", s3_intensity);
+        scratch_uv = cfg.get_double("materials.scratches.uv_scale", scratch_uv);
+        s1_freq = cfg.get_double("materials.scratches.layer1.frequency", s1_freq);
+        s1_power = cfg.get_double("materials.scratches.layer1.power", s1_power);
+        s1_intensity = cfg.get_double("materials.scratches.layer1.intensity", s1_intensity);
+        s2_angle = cfg.get_double("materials.scratches.layer2.angle_offset", s2_angle);
+        s2_freq = cfg.get_double("materials.scratches.layer2.frequency", s2_freq);
+        s2_phase = cfg.get_double("materials.scratches.layer2.phase_mult", s2_phase);
+        s2_power = cfg.get_double("materials.scratches.layer2.power", s2_power);
+        s2_intensity = cfg.get_double("materials.scratches.layer2.intensity", s2_intensity);
+        s3_angle = cfg.get_double("materials.scratches.layer3.angle_offset", s3_angle);
+        s3_freq = cfg.get_double("materials.scratches.layer3.frequency", s3_freq);
+        s3_phase = cfg.get_double("materials.scratches.layer3.phase_mult", s3_phase);
+        s3_power = cfg.get_double("materials.scratches.layer3.power", s3_power);
+        s3_intensity = cfg.get_double("materials.scratches.layer3.intensity", s3_intensity);
 
-        sky_base = cfg.get_vec("sky.base_color", sky_base);
-        sky_horizon = cfg.get_double("sky.horizon_threshold", sky_horizon);
-        ceiling_h = cfg.get_double("sky.ceiling_height", ceiling_h);
-        grid_spacing = cfg.get_double("sky.grid_spacing", grid_spacing);
-        glow_width = cfg.get_double("sky.glow_width", glow_width);
-        grid_fade = cfg.get_double("sky.fade_rate", grid_fade);
-        neon_color = cfg.get_vec("sky.neon_color", neon_color);
-        neon_intensity = cfg.get_double("sky.neon_intensity", neon_intensity);
+        // Environment
+        shadow_ambient = cfg.get_double("environment.shadow_ambient", shadow_ambient);
+        sky_base = cfg.get_vec("environment.sky.base_color", sky_base);
+        sky_horizon = cfg.get_double("environment.sky.horizon_threshold", sky_horizon);
+        ceiling_h = cfg.get_double("environment.sky.ceiling_height", ceiling_h);
+        grid_spacing = cfg.get_double("environment.sky.grid_spacing", grid_spacing);
+        glow_width = cfg.get_double("environment.sky.glow_width", glow_width);
+        grid_fade = cfg.get_double("environment.sky.fade_rate", grid_fade);
+        neon_color = cfg.get_vec("environment.sky.neon_color", neon_color);
+        neon_intensity = cfg.get_double("environment.sky.neon_intensity", neon_intensity);
+        fog_density = cfg.get_double("environment.fog.density", fog_density);
+        fog_steps = cfg.get_int("environment.fog.steps", fog_steps);
+        fog_nx = cfg.get_double("environment.fog.noise_x", fog_nx);
+        fog_nxz = cfg.get_double("environment.fog.noise_xz", fog_nxz);
+        fog_ny = cfg.get_double("environment.fog.noise_y", fog_ny);
+        fog_nz = cfg.get_double("environment.fog.noise_z", fog_nz);
 
-        fog_density = cfg.get_double("fog.density", fog_density);
-        fog_steps = cfg.get_int("fog.steps", fog_steps);
-        fog_nx = cfg.get_double("fog.noise_x", fog_nx);
-        fog_nxz = cfg.get_double("fog.noise_xz", fog_nxz);
-        fog_ny = cfg.get_double("fog.noise_y", fog_ny);
-        fog_nz = cfg.get_double("fog.noise_z", fog_nz);
-
-        bloom_r = cfg.get_int("bloom.radius", bloom_r);
-        bloom_threshold = cfg.get_double("bloom.threshold", bloom_threshold);
-        bloom_intensity = cfg.get_double("bloom.intensity", bloom_intensity);
-        gamma = cfg.get_double("bloom.gamma", gamma);
-
-        // Font-rendered text blocks
-        text_blocks.clear();
-        for (int i = 0; ; i++) {
-            char prefix[64];
-            snprintf(prefix, sizeof(prefix), "texts.%d", i);
-            char key[128];
-            snprintf(key, sizeof(key), "%s.string", prefix);
-            std::string content = cfg.get_string(key);
-            if (content.empty()) break;
-            TextBlock tb;
-            tb.content = content;
-            snprintf(key, sizeof(key), "%s.position", prefix);
-            Vec pos = cfg.get_vec(key, Vec(0, 0, 0));
-            tb.x = pos.x; tb.y = pos.y; tb.z = pos.z;
-            snprintf(key, sizeof(key), "%s.col_spacing", prefix);
-            tb.col_spacing = cfg.get_double(key, 1.0);
-            snprintf(key, sizeof(key), "%s.row_spacing", prefix);
-            tb.row_spacing = cfg.get_double(key, 1.0);
-            text_blocks.push_back(tb);
-        }
+        // Post-processing
+        bloom_r = cfg.get_int("post_processing.bloom.radius", bloom_r);
+        bloom_threshold = cfg.get_double("post_processing.bloom.threshold", bloom_threshold);
+        bloom_intensity = cfg.get_double("post_processing.bloom.intensity", bloom_intensity);
+        gamma = cfg.get_double("post_processing.bloom.gamma", gamma);
 
         compute_derived();
     }
@@ -1207,8 +1225,8 @@ int main(int argc, char* argv[]) {
         return 1;
     }
     std::string version = yaml.get_string("version");
-    if (version != "nanore@1") {
-        fprintf(stderr, "Error: unsupported scene version '%s' (expected nanore@1)\n", version.c_str());
+    if (version != "nanore@2") {
+        fprintf(stderr, "Error: unsupported scene version '%s' (expected nanore@2)\n", version.c_str());
         return 1;
     }
     SC.load_from_yaml(yaml);

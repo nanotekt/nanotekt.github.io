@@ -1,4 +1,4 @@
-version: nanore@1
+version: nanore@2
 
 rendering:
   width: 1024
@@ -10,78 +10,91 @@ camera:
   position: [0, 5, 22]
   target: [0, 5, -20]
 
-text:
-  bitmap:
-    0: @...@..@@@..@...@..@@@..@@@@@.@@@@@.@...@.@@@@@
-    1: @@..@.@...@.@@..@.@...@...@...@.....@..@....@..
-    2: @.@.@.@@@@@.@.@.@.@...@...@...@@@@..@@@.....@..
-    3: @..@@.@...@.@..@@.@...@...@...@.....@..@....@..
-    4: @...@.@...@.@...@.@...@...@...@.....@...@...@..
-    5: @...@.@...@.@...@..@@@....@...@@@@@.@...@...@..
-  sphere_radius: 0.8
-  x_offset: -23.0
-  y_base: 23.0
-  y_spacing: 0.9
-  z_depth: -24.0
-  slash_x_base: 0.0
-  slash_y_base: 0.0
-  slash_count: 0
-
-rounded_cube:
-  center: [0.0, 9.5, -24.0]
-  rotation: [0.3, 0.5, 0.2]
-  count: 256
-  half_min: 0.3
-  half_max: 1.2
-  spread: 8.0
-  round_ratio: 0.2
-  seed: 42
-
-red_disc:
-  center: [0.0, 6.5, -34.0]
-  normal: [0.0, 0.0, 1.0]
-  radius: 18.0
-  emissive_color: [4.0, 0.05, 0.05]
-
-floor:
-  bounds_x: [-20, 20]
-  bounds_z: [-30, 22]
-  max_height: 1.2
-  white_color: [0.12, 0.12, 0.14]
-  red_color: [0.06, 0.06, 0.08]
-  diffuse: 0.3
-  ambient: 0.06
-  reflect_base: 0.3
-  reflect_mirror: 0.7
-  max_depth: 2
-  spec_power: 64
-  spec_intensity: 0.5
-
-glass:
-  edge: 0.8
-  cluster_min: 3
-  cluster_max: 9
-  size_min: 0.2
-  size_max: 0.6
-  spread: 0.5
-  ior: 1.5
-  fresnel_r0: 0.04
-  tint_scale: 0.1
-  tint_rgb: [0.02, 0.01, 0.005]
-  spec_power: 128
-  spec_intensity: 0.3
-  max_depth: 4
-  passthrough_depth: 6
-
-lights:
-  light1:
+objects:
+  nanotekt:
+    type: bitmap_text
+    bitmap:
+      0: @...@..@@@..@...@..@@@..@@@@@.@@@@@.@...@.@@@@@
+      1: @@..@.@...@.@@..@.@...@...@...@.....@..@....@..
+      2: @.@.@.@@@@@.@.@.@.@...@...@...@@@@..@@@.....@..
+      3: @..@@.@...@.@..@@.@...@...@...@.....@..@....@..
+      4: @...@.@...@.@...@.@...@...@...@.....@...@...@..
+      5: @...@.@...@.@...@..@@@....@...@@@@@.@...@...@..
+    sphere_radius: 0.8
+    x_offset: -23.0
+    y_base: 23.0
+    y_spacing: 0.9
+    z_depth: -24.0
+    slash_x_base: 0.0
+    slash_y_base: 0.0
+    slash_count: 0
+  chrome_cubes:
+    type: rounded_cube
+    center: [0.0, 9.5, -24.0]
+    rotation: [0.3, 0.5, 0.2]
+    count: 256
+    half_min: 0.3
+    half_max: 1.2
+    spread: 8.0
+    round_ratio: 0.2
+    seed: 42
+  backdrop:
+    type: disc
+    center: [0.0, 6.5, -34.0]
+    normal: [0.0, 0.0, 1.0]
+    radius: 18.0
+    emissive_color: [4.0, 0.05, 0.05]
+    light_color: [4.0, 0.05, 0.05]
+  floor:
+    type: floor
+    bounds_x: [-20, 20]
+    bounds_z: [-30, 22]
+    max_height: 1.2
+    white_color: [0.12, 0.12, 0.14]
+    red_color: [0.06, 0.06, 0.08]
+    diffuse: 0.3
+    ambient: 0.06
+    reflect_base: 0.3
+    reflect_mirror: 0.7
+    max_depth: 2
+    spec_power: 64
+    spec_intensity: 0.5
+  glass:
+    type: glass
+    edge: 0.8
+    cluster_min: 3
+    cluster_max: 9
+    size_min: 0.2
+    size_max: 0.6
+    spread: 0.5
+    ior: 1.5
+    fresnel_r0: 0.04
+    tint_scale: 0.1
+    tint_rgb: [0.02, 0.01, 0.005]
+    spec_power: 128
+    spec_intensity: 0.3
+    max_depth: 4
+    passthrough_depth: 6
+  key_light:
+    type: light
     position: [10, 15, 0]
     color: [1.0, 0.7, 0.3]
-  light2:
+  fill_light:
+    type: light
     position: [-10, 15, -5]
     color: [0.3, 0.5, 1.0]
-  light3_color: [4.0, 0.05, 0.05]
-  shadow_ambient: 0.1
+  with_love:
+    type: text
+    string: with love
+    position: [-13.5, 9.0, -14.0]
+    col_spacing: 0.5
+    row_spacing: 0.5
+  skmp:
+    type: text
+    string: skmp
+    position: [-3.0, 5.0, -7.0]
+    col_spacing: 0.5
+    row_spacing: 0.5
 
 materials:
   chrome:
@@ -104,58 +117,47 @@ materials:
     max_depth: 3
     spec_power: 40
     spec_intensity: 0.5
+  scratches:
+    uv_scale: 10.0
+    layer1:
+      frequency: 14.0
+      power: 4.0
+      intensity: 0.3
+    layer2:
+      angle_offset: 1.2
+      frequency: 22.0
+      phase_mult: 1.5
+      power: 5.0
+      intensity: 0.18
+    layer3:
+      angle_offset: 2.5
+      frequency: 35.0
+      phase_mult: 0.5
+      power: 6.0
+      intensity: 0.1
 
-scratches:
-  uv_scale: 10.0
-  layer1:
-    frequency: 14.0
-    power: 4.0
-    intensity: 0.3
-  layer2:
-    angle_offset: 1.2
-    frequency: 22.0
-    phase_mult: 1.5
-    power: 5.0
-    intensity: 0.18
-  layer3:
-    angle_offset: 2.5
-    frequency: 35.0
-    phase_mult: 0.5
-    power: 6.0
-    intensity: 0.1
+environment:
+  shadow_ambient: 0.1
+  sky:
+    base_color: [0.06, 0.02, 0.12]
+    horizon_threshold: 0.005
+    ceiling_height: 25.0
+    grid_spacing: 8.0
+    glow_width: 0.5
+    fade_rate: 0.012
+    neon_color: [1.0, 0.15, 0.6]
+    neon_intensity: 2.5
+  fog:
+    density: 0.01
+    steps: 32
+    noise_x: 0.025
+    noise_xz: 0.012
+    noise_y: 0.04
+    noise_z: 0.03
 
-sky:
-  base_color: [0.06, 0.02, 0.12]
-  horizon_threshold: 0.005
-  ceiling_height: 25.0
-  grid_spacing: 8.0
-  glow_width: 0.5
-  fade_rate: 0.012
-  neon_color: [1.0, 0.15, 0.6]
-  neon_intensity: 2.5
-
-fog:
-  density: 0.01
-  steps: 32
-  noise_x: 0.025
-  noise_xz: 0.012
-  noise_y: 0.04
-  noise_z: 0.03
-
-texts:
-  0:
-    string: with love
-    position: [-13.5, 9.0, -14.0]
-    col_spacing: 0.5
-    row_spacing: 0.5
-  1:
-    string: skmp
-    position: [-3.0, 5.0, -7.0]
-    col_spacing: 0.5
-    row_spacing: 0.5
-
-bloom:
-  radius: 24
-  threshold: 0.7
-  intensity: 0.7
-  gamma: 0.45
+post_processing:
+  bloom:
+    radius: 24
+    threshold: 0.7
+    intensity: 0.7
+    gamma: 0.45
