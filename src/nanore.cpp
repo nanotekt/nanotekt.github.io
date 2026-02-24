@@ -200,6 +200,22 @@ struct SceneConfig {
     int floor_max_depth = 2;
     double floor_spec_power = 48, floor_spec_intensity = 0.4;
 
+    // Reflective inner spheres (inside glass spheres)
+    double rsph_radius_mult = 0.625; // half the glass sphere diameter = gsph * 0.5
+
+    // Glass spheres (around text spheres)
+    double gsph_radius_mult = 1.25;
+    double gsph_ior = 1.5, gsph_r0 = 0.04;
+    double gsph_tint_scale = 0.1;
+    Vec gsph_tint_rgb{0.02, 0.01, 0.005};
+    double gsph_spec_power = 128, gsph_spec_intensity = 0.3;
+    int gsph_max_depth = 4, gsph_passthrough_depth = 6;
+
+    // Emissive tori (around text spheres)
+    double torus_major_mult = 1.0;
+    double torus_minor = 0.07;
+    double torus_emissive_intensity = 2.0;
+
     // Glass
     double glass_edge = 1.2, glass_ior = 1.5, glass_r0 = 0.04;
     double glass_tint_scale = 0.15;
@@ -375,6 +391,22 @@ struct SceneConfig {
                 tb.col_spacing = cfg.get_double(p + "col_spacing", 1.0);
                 tb.row_spacing = cfg.get_double(p + "row_spacing", 1.0);
                 text_blocks.push_back(tb);
+            } else if (type == "reflective_sphere") {
+                rsph_radius_mult = cfg.get_double(p + "radius_mult", rsph_radius_mult);
+            } else if (type == "glass_sphere") {
+                gsph_radius_mult = cfg.get_double(p + "radius_mult", gsph_radius_mult);
+                gsph_ior = cfg.get_double(p + "ior", gsph_ior);
+                gsph_r0 = cfg.get_double(p + "fresnel_r0", gsph_r0);
+                gsph_tint_scale = cfg.get_double(p + "tint_scale", gsph_tint_scale);
+                gsph_tint_rgb = cfg.get_vec(p + "tint_rgb", gsph_tint_rgb);
+                gsph_spec_power = cfg.get_double(p + "spec_power", gsph_spec_power);
+                gsph_spec_intensity = cfg.get_double(p + "spec_intensity", gsph_spec_intensity);
+                gsph_max_depth = cfg.get_int(p + "max_depth", gsph_max_depth);
+                gsph_passthrough_depth = cfg.get_int(p + "passthrough_depth", gsph_passthrough_depth);
+            } else if (type == "emissive_torus") {
+                torus_major_mult = cfg.get_double(p + "major_mult", torus_major_mult);
+                torus_minor = cfg.get_double(p + "minor", torus_minor);
+                torus_emissive_intensity = cfg.get_double(p + "intensity", torus_emissive_intensity);
             }
         }
 
@@ -446,6 +478,7 @@ static SceneConfig SC;
 // Sphere centers (text + slash)
 struct SphCenter { double x, y, z; };
 static std::vector<SphCenter> centers;
+static std::vector<Vec> torus_colors;
 
 // Tile heights (dynamic — bounds come from YAML)
 static std::vector<double> tile_heights;
@@ -618,6 +651,19 @@ static Vec sdf_normal(const Vec& p, double half_edge, double rounding) {
     double dx = sdf_round_box(p + Vec(eps,0,0), half_edge, rounding) - sdf_round_box(p - Vec(eps,0,0), half_edge, rounding);
     double dy = sdf_round_box(p + Vec(0,eps,0), half_edge, rounding) - sdf_round_box(p - Vec(0,eps,0), half_edge, rounding);
     double dz = sdf_round_box(p + Vec(0,0,eps), half_edge, rounding) - sdf_round_box(p - Vec(0,0,eps), half_edge, rounding);
+    return Vec(dx, dy, dz).norm();
+}
+
+static inline double sdf_torus(const Vec& p, double major_r, double minor_r) {
+    double q = std::sqrt(p.x*p.x + p.z*p.z) - major_r;
+    return std::sqrt(q*q + p.y*p.y) - minor_r;
+}
+
+static Vec sdf_torus_normal(const Vec& p, double major_r, double minor_r) {
+    const double eps = 0.001;
+    double dx = sdf_torus(p + Vec(eps,0,0), major_r, minor_r) - sdf_torus(p - Vec(eps,0,0), major_r, minor_r);
+    double dy = sdf_torus(p + Vec(0,eps,0), major_r, minor_r) - sdf_torus(p - Vec(0,eps,0), major_r, minor_r);
+    double dz = sdf_torus(p + Vec(0,0,eps), major_r, minor_r) - sdf_torus(p - Vec(0,0,eps), major_r, minor_r);
     return Vec(dx, dy, dz).norm();
 }
 
@@ -846,22 +892,91 @@ static HitResult test(const Vec& o, const Vec& d, bool skip_tiles = false) {
         }
     }
 
-    // Text spheres
-    for (int ci = 0; ci < (int)centers.size(); ci++) {
-        const auto& c = centers[ci];
-        double px = ox - c.x, py = oy - c.y, pz = oz - c.z;
-        double b = px*dx + py*dy + pz*dz;
-        double disc = b*b - (px*px + py*py + pz*pz - SC.sph_r2);
-        if (disc < 0) continue;
-        double sq = std::sqrt(disc);
-        double tt = -b - sq;
-        if (tt < 0.01) tt = -b + sq;
-        if (tt > 0.01 && tt < t) {
-            t = tt;
-            double inv_r = 1.0 / SC.sph_r;
-            n = Vec((ox + dx*tt - c.x) * inv_r, (oy + dy*tt - c.y) * inv_r, (oz + dz*tt - c.z) * inv_r);
-            m = 3;
-            hit_sphere_idx = ci;
+    // Text spheres + glass spheres + reflective inner spheres + emissive tori
+    {
+        double gsph_r = SC.sph_r * SC.gsph_radius_mult;
+        double gsph_r2 = gsph_r * gsph_r;
+        double rsph_r = SC.sph_r * SC.rsph_radius_mult;
+        double rsph_r2 = rsph_r * rsph_r;
+        double torus_major = SC.sph_r * SC.torus_major_mult;
+        double torus_bound_r = torus_major + SC.torus_minor;
+        double torus_bound_r2 = torus_bound_r * torus_bound_r;
+        for (int ci = 0; ci < (int)centers.size(); ci++) {
+            const auto& c = centers[ci];
+            double px = ox - c.x, py = oy - c.y, pz = oz - c.z;
+            double b = px*dx + py*dy + pz*dz;
+            double d2 = px*px + py*py + pz*pz;
+
+            // Text sphere (m=3)
+            double disc = b*b - (d2 - SC.sph_r2);
+            if (disc >= 0) {
+                double sq = std::sqrt(disc);
+                double tt = -b - sq;
+                if (tt < 0.01) tt = -b + sq;
+                if (tt > 0.01 && tt < t) {
+                    t = tt;
+                    double inv_r = 1.0 / SC.sph_r;
+                    n = Vec((ox + dx*tt - c.x) * inv_r, (oy + dy*tt - c.y) * inv_r, (oz + dz*tt - c.z) * inv_r);
+                    m = 3;
+                    hit_sphere_idx = ci;
+                }
+            }
+
+            // Glass sphere (m=7)
+            double gdisc = b*b - (d2 - gsph_r2);
+            if (gdisc >= 0) {
+                double gsq = std::sqrt(gdisc);
+                double gtt = -b - gsq;
+                if (gtt < 0.01) gtt = -b + gsq;
+                if (gtt > 0.01 && gtt < t) {
+                    t = gtt;
+                    double inv_r = 1.0 / gsph_r;
+                    n = Vec((ox + dx*gtt - c.x) * inv_r, (oy + dy*gtt - c.y) * inv_r, (oz + dz*gtt - c.z) * inv_r);
+                    m = 7;
+                    hit_sphere_idx = ci;
+                }
+            }
+
+            // Reflective inner sphere (m=9)
+            double rdisc = b*b - (d2 - rsph_r2);
+            if (rdisc >= 0) {
+                double rsq = std::sqrt(rdisc);
+                double rtt = -b - rsq;
+                if (rtt < 0.01) rtt = -b + rsq;
+                if (rtt > 0.01 && rtt < t) {
+                    t = rtt;
+                    double inv_r = 1.0 / rsph_r;
+                    n = Vec((ox + dx*rtt - c.x) * inv_r, (oy + dy*rtt - c.y) * inv_r, (oz + dz*rtt - c.z) * inv_r);
+                    m = 9;
+                    hit_sphere_idx = ci;
+                }
+            }
+
+            // Emissive torus (m=8) — SDF ray march
+            double tdisc = b*b - (d2 - torus_bound_r2);
+            if (tdisc >= 0) {
+                double tsq = std::sqrt(tdisc);
+                double t_near = -b - tsq;
+                double t_far = -b + tsq;
+                if (t_far > 0.01 && t_near < t) {
+                    double tt = std::max(t_near, 0.01);
+                    for (int step = 0; step < 48; step++) {
+                        Vec lp(ox + dx*tt - c.x, oy + dy*tt - c.y, oz + dz*tt - c.z);
+                        double dist = sdf_torus(lp, torus_major, SC.torus_minor);
+                        if (dist < 0.001) {
+                            if (tt < t) {
+                                t = tt;
+                                n = sdf_torus_normal(lp, torus_major, SC.torus_minor);
+                                m = 8;
+                                hit_sphere_idx = ci;
+                            }
+                            break;
+                        }
+                        tt += dist;
+                        if (tt > std::min(t_far, t)) break;
+                    }
+                }
+            }
         }
     }
 
@@ -967,6 +1082,9 @@ static Vec trace(const Vec& o, const Vec& d, int depth) {
     // Emissive disc
     if (m == 6) return SC.disc_emissive;
 
+    // Emissive torus
+    if (m == 8) return torus_colors[hit_sphere_idx] * SC.torus_emissive_intensity;
+
     Vec light1 = Vec(SC.light1_pos.x + randf(), SC.light1_pos.y + randf(), SC.light1_pos.z).norm();
     Vec light2 = Vec(SC.light2_pos.x + randf(), SC.light2_pos.y + randf(), SC.light2_pos.z).norm();
     double angle = randf() * 2.0 * M_PI;
@@ -986,6 +1104,60 @@ static Vec trace(const Vec& o, const Vec& d, int depth) {
     double d2 = std::max(0.0, light2.dot(n)) * s2;
     double d3 = std::max(0.0, light3.dot(n)) * s3;
 
+    if (m == 7 && depth < SC.gsph_max_depth) {
+        // Glass sphere — refraction + reflection
+        double cos_i = -(d.dot(n));
+        Vec nn = n;
+        if (cos_i < 0) { cos_i = -cos_i; nn = n * -1; }
+        double fresnel = SC.gsph_r0 + (1 - SC.gsph_r0) * std::pow(1 - cos_i, 5);
+        Vec r = d - nn * (2 * d.dot(nn));
+
+        Vec transmitted(0, 0, 0);
+        double eta = 1.0 / SC.gsph_ior;
+        double k = 1.0 - eta * eta * (1.0 - cos_i * cos_i);
+        if (k > 0) {
+            Vec refr = d * eta + nn * (eta * cos_i - std::sqrt(k));
+            // Find exit point: ray from inside sphere hits back surface
+            const auto& c = centers[hit_sphere_idx];
+            double gsph_r = SC.sph_r * SC.gsph_radius_mult;
+            Vec entry = hit + refr * 0.02;
+            double epx = entry.x - c.x, epy = entry.y - c.y, epz = entry.z - c.z;
+            double eb = epx*refr.x + epy*refr.y + epz*refr.z;
+            double edisc = eb*eb - (epx*epx + epy*epy + epz*epz - gsph_r*gsph_r);
+            if (edisc > 0) {
+                double exit_t = -eb + std::sqrt(edisc);
+                if (exit_t > 0) {
+                    Vec exit_pt = entry + refr * exit_t;
+                    Vec en = Vec(exit_pt.x - c.x, exit_pt.y - c.y, exit_pt.z - c.z) * (1.0 / gsph_r);
+                    double cos_o = -(refr.dot(en));
+                    if (cos_o < 0) { cos_o = -cos_o; en = en * -1; }
+                    double eta2 = SC.gsph_ior;
+                    double k2 = 1.0 - eta2 * eta2 * (1.0 - cos_o * cos_o);
+                    if (k2 > 0) {
+                        Vec exit_refr = refr * eta2 + en * (eta2 * cos_o - std::sqrt(k2));
+                        transmitted = trace(exit_pt + exit_refr * 0.02, exit_refr, depth + 1);
+                    } else {
+                        Vec refl_int = refr - en * (2 * refr.dot(en));
+                        transmitted = trace(exit_pt + refl_int * 0.02, refl_int, depth + 1);
+                    }
+                    double pl = exit_t * SC.gsph_tint_scale;
+                    transmitted = Vec(transmitted.x * (1 - pl*SC.gsph_tint_rgb.x),
+                                      transmitted.y * (1 - pl*SC.gsph_tint_rgb.y),
+                                      transmitted.z * (1 - pl*SC.gsph_tint_rgb.z));
+                }
+            }
+        } else {
+            fresnel = 1.0;
+        }
+        Vec reflected = fresnel > 0.02 ? trace(hit + nn * 0.02, r, depth + 1) : Vec();
+        Vec base = reflected * fresnel + transmitted * (1.0 - fresnel);
+        double sp1 = std::pow(std::max(0.0, light1.dot(r)), SC.gsph_spec_power) * s1;
+        double sp2 = std::pow(std::max(0.0, light2.dot(r)), SC.gsph_spec_power) * s2;
+        return base + L1 * (sp1 * SC.gsph_spec_intensity) + L2 * (sp2 * SC.gsph_spec_intensity);
+    }
+    if (m == 7) {
+        return depth < SC.gsph_passthrough_depth ? trace(hit + d * 0.02, d, depth + 1) : Vec();
+    }
     if (m == 4 && depth < SC.glass_max_depth) {
         // Glass cube — refraction + reflection
         double cos_i = -(d.dot(n));
@@ -1047,8 +1219,8 @@ static Vec trace(const Vec& o, const Vec& d, int depth) {
     if (m == 4) {
         return depth < SC.glass_passthrough_depth ? trace(hit + d * 0.02, d, depth + 1) : Vec();
     }
-    if (m == 5) {
-        // Rounded reflective cube — chrome
+    if (m == 5 || m == 9) {
+        // Chrome reflective surface (rounded cubes + inner spheres)
         Vec r = d - n * (2 * d.dot(n));
         Vec color = SC.chrome_color;
         Vec lit = L1 * d1 + L2 * d2 + L3 * d3;
@@ -1237,6 +1409,18 @@ int main(int argc, char* argv[]) {
     init_rcubes();
     init_centers();
 
+    // Generate random emissive colors for tori
+    torus_colors.clear();
+    {
+        uint32_t tseed = 777u;
+        for (size_t i = 0; i < centers.size(); i++) {
+            torus_colors.push_back(Vec(
+                rcube_randf(tseed) * 2.0 + 0.5,
+                rcube_randf(tseed) * 2.0 + 0.5,
+                rcube_randf(tseed) * 2.0 + 0.5));
+        }
+    }
+
     int W = SC.width, H = SC.height;
     printf("nanore ray tracer\n");
     printf("  Resolution: %dx%d, %d samples/pixel\n", W, H, SC.samples);
@@ -1403,6 +1587,22 @@ int main(int argc, char* argv[]) {
     }
     fclose(f);
     printf("  Saved to %s\n", outpath);
+
+    // Also save as renders/latest.bmp
+    FILE* fl = fopen("renders/latest.bmp", "wb");
+    if (fl) {
+        fwrite(bmp_header, 1, 54, fl);
+        for (int y = H - 1; y >= 0; y--) {
+            for (int x = 0; x < W; x++) {
+                int idx = (y * W + x) * 3;
+                uint8_t bgr[3] = {pixels[idx+2], pixels[idx+1], pixels[idx]};
+                fwrite(bgr, 1, 3, fl);
+            }
+            if (pad) fwrite(padding, 1, pad, fl);
+        }
+        fclose(fl);
+        printf("  Saved to renders/latest.bmp\n");
+    }
 
     delete[] hdr;
     delete[] pixels;

@@ -83,6 +83,25 @@ objects:
     type: light
     position: [-10, 15, -5]
     color: [0.3, 0.5, 1.0]
+  inner_chrome:
+    type: reflective_sphere
+    radius_mult: 0.625
+  sphere_glass:
+    type: glass_sphere
+    radius_mult: 1.25
+    ior: 1.5
+    fresnel_r0: 0.04
+    tint_scale: 0.1
+    tint_rgb: [0.02, 0.01, 0.005]
+    spec_power: 128
+    spec_intensity: 0.3
+    max_depth: 4
+    passthrough_depth: 6
+  sphere_torus:
+    type: emissive_torus
+    major_mult: 3.125
+    minor: 0.07
+    intensity: 2.0
   with_love:
     type: text
     string: with love
