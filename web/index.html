@@ -21,7 +21,7 @@ html,body{height:100%;background:#0d0d1a;color:#c0c0d0;font-family:'Courier New'
 .tab:hover{color:#aaa;border-color:#555}
 .tab.active{background:#2a1a3e;color:#e0a0d0;border-color:#6a3a7a}
 #canvas-wrap{position:relative;flex:1;display:flex;align-items:center;justify-content:center;background:#080810;border:1px solid #222;border-radius:4px;overflow:hidden}
-canvas{max-width:100%;max-height:100%;image-rendering:auto}
+canvas{image-rendering:auto;transform-origin:0 0}
 #overlay{position:absolute;inset:0;display:none;flex-direction:column;align-items:center;justify-content:center;background:rgba(8,8,16,0.3);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);z-index:10}
 #progress-track{width:50%;height:4px;background:#1a1a2e;border-radius:2px;overflow:hidden}
 #progress-fill{height:100%;width:0%;background:linear-gradient(90deg,#e04080,#ff6090);transition:width .15s}
@@ -83,6 +83,7 @@ var Module = {
 (function() {
   var canvas = document.getElementById('render-canvas');
   var ctx = canvas.getContext('2d');
+  var canvasWrap = document.getElementById('canvas-wrap');
   var editor = document.getElementById('yaml-editor');
   var overlay = document.getElementById('overlay');
   var progressFill = document.getElementById('progress-fill');
@@ -99,6 +100,33 @@ var Module = {
   var zbufImageData = null;
   var pendingRender = false;
   var t0 = 0;
+
+  // Zoom & pan state
+  var zoom = 1;
+  var panX = 0, panY = 0;
+  var dragging = false;
+  var dragStartX = 0, dragStartY = 0;
+  var panStartX = 0, panStartY = 0;
+
+  function applyTransform() {
+    canvas.style.transform = 'translate(' + panX + 'px,' + panY + 'px) scale(' + zoom + ')';
+  }
+
+  function resetView() {
+    zoom = 1; panX = 0; panY = 0;
+    applyTransform();
+  }
+
+  // Load preview.png as default image
+  var previewImg = new Image();
+  previewImg.onload = function() {
+    canvas.width = previewImg.width;
+    canvas.height = previewImg.height;
+    ctx.drawImage(previewImg, 0, 0);
+    colorImageData = ctx.getImageData(0, 0, previewImg.width, previewImg.height);
+    statusEl.textContent = 'Loading WASM...';
+  };
+  previewImg.src = 'preview.png';
 
   // SharedArrayBuffer check
   if (typeof SharedArrayBuffer === 'undefined') {
@@ -137,7 +165,6 @@ var Module = {
     t0 = performance.now();
 
     try {
-      // Allocate YAML string in WASM memory and call start_render
       var yamlBytes = Module.lengthBytesUTF8(yaml) + 1;
       var yamlPtr = Module._malloc(yamlBytes);
       Module.stringToUTF8(yaml, yamlPtr, yamlBytes);
@@ -153,7 +180,6 @@ var Module = {
       return;
     }
 
-    // Poll for progress and completion
     pollTimer = setInterval(pollRender, 200);
   }
 
@@ -177,6 +203,7 @@ var Module = {
           var elapsed = ((performance.now() - t0) / 1000).toFixed(1);
           statusEl.textContent = 'Done in ' + elapsed + 's';
           captureResults();
+          resetView();
           drawActiveTab();
         } else if (result === 1) {
           statusEl.textContent = 'Cancelled';
@@ -208,7 +235,6 @@ var Module = {
   }
 
   function getMemoryBuffer() {
-    // Always get a fresh buffer reference — handles memory growth
     return Module.wasmMemory ? Module.wasmMemory.buffer : Module.HEAPU8.buffer;
   }
 
@@ -219,7 +245,6 @@ var Module = {
     canvas.width = W;
     canvas.height = H;
 
-    // Color buffer — use fresh view from wasmMemory to handle memory growth
     var pixPtr = Module._get_pixels_ptr();
     console.log('[nanore] pixPtr=' + pixPtr);
     if (pixPtr) {
@@ -236,7 +261,6 @@ var Module = {
       console.log('[nanore] Color captured, first pixel: ' + d[0] + ',' + d[1] + ',' + d[2]);
     }
 
-    // Z-buffer
     var zPtr = Module._get_zbuf_ptr();
     console.log('[nanore] zPtr=' + zPtr);
     if (zPtr) {
@@ -268,9 +292,53 @@ var Module = {
       canvas.width = img.width;
       canvas.height = img.height;
       ctx.putImageData(img, 0, 0);
+      applyTransform();
       console.log('[nanore] Drew ' + activeTab + ' ' + img.width + 'x' + img.height);
     }
   }
+
+  // Zoom with scroll wheel
+  canvasWrap.addEventListener('wheel', function(e) {
+    e.preventDefault();
+    var rect = canvasWrap.getBoundingClientRect();
+    var mx = e.clientX - rect.left;
+    var my = e.clientY - rect.top;
+    var oldZoom = zoom;
+    var factor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+    zoom = Math.min(Math.max(zoom * factor, 0.25), 20);
+    // Zoom towards cursor
+    panX = mx - (mx - panX) * (zoom / oldZoom);
+    panY = my - (my - panY) * (zoom / oldZoom);
+    applyTransform();
+  }, {passive: false});
+
+  // Pan with mouse drag
+  canvasWrap.addEventListener('mousedown', function(e) {
+    if (e.button !== 0) return;
+    dragging = true;
+    dragStartX = e.clientX;
+    dragStartY = e.clientY;
+    panStartX = panX;
+    panStartY = panY;
+    canvasWrap.style.cursor = 'grabbing';
+  });
+  window.addEventListener('mousemove', function(e) {
+    if (!dragging) return;
+    panX = panStartX + (e.clientX - dragStartX);
+    panY = panStartY + (e.clientY - dragStartY);
+    applyTransform();
+  });
+  window.addEventListener('mouseup', function() {
+    if (dragging) {
+      dragging = false;
+      canvasWrap.style.cursor = '';
+    }
+  });
+
+  // Double-click to reset view
+  canvasWrap.addEventListener('dblclick', function() {
+    resetView();
+  });
 
   // Tab switching
   var tabs = document.querySelectorAll('.tab');
