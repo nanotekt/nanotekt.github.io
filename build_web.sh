@@ -32,6 +32,7 @@ yaml = re.sub(r'^  width: \d+', '  width: 256', yaml, count=1, flags=re.MULTILIN
 yaml = re.sub(r'^  height: \d+', '  height: 256', yaml, count=1, flags=re.MULTILINE)
 yaml = re.sub(r'^  samples: \d+', '  samples: 1', yaml, count=1, flags=re.MULTILINE)
 html = html.replace('__DEFAULT_YAML__', yaml.rstrip())
+html = html.replace('__OG_IMAGE_URL__', 'https://nanotekt.github.io/preview.png')
 with open('dist/index.html', 'w') as f:
     f.write(html)
 "
