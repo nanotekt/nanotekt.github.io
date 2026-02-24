@@ -11,7 +11,12 @@
 #include <atomic>
 #include <string>
 #include <map>
+#ifndef __EMSCRIPTEN__
 #include <sys/stat.h>
+#endif
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#endif
 
 struct Vec {
     double x, y, z;
@@ -96,6 +101,41 @@ struct YamlConfig {
             data[full_key] = value;
         }
         fclose(f);
+        return true;
+    }
+
+    bool load_from_string(const char* yaml_str) {
+        data.clear();
+        std::string prefix[8];
+        const char* p = yaml_str;
+        while (*p) {
+            char buf[512];
+            int i = 0;
+            while (*p && *p != '\n' && i < 511) buf[i++] = *p++;
+            buf[i] = '\0';
+            if (*p == '\n') p++;
+            std::string line(buf);
+            while (!line.empty() && (line.back() == '\n' || line.back() == '\r'))
+                line.pop_back();
+            size_t hash = line.find('#');
+            if (hash != std::string::npos)
+                line = line.substr(0, hash);
+            std::string trimmed = trim(line);
+            if (trimmed.empty()) continue;
+            int indent = 0;
+            for (char c : line) { if (c == ' ') indent++; else break; }
+            int level = indent / 2;
+            size_t colon = trimmed.find(':');
+            if (colon == std::string::npos) continue;
+            std::string key = trim(trimmed.substr(0, colon));
+            std::string value = trim(trimmed.substr(colon + 1));
+            prefix[level] = key;
+            if (value.empty()) continue;
+            std::string full_key;
+            for (int j = 0; j < level; j++) full_key += prefix[j] + ".";
+            full_key += key;
+            data[full_key] = value;
+        }
         return true;
     }
 
@@ -1384,75 +1424,67 @@ static inline int clamp(double v) {
     return i < 0 ? 0 : (i > 255 ? 255 : i);
 }
 
-int main(int argc, char* argv[]) {
-    // Load scene from YAML
-    if (argc < 2) {
-        fprintf(stderr, "Usage: %s <scene.yaml>\n", argv[0]);
-        return 1;
-    }
-    const char* scene_file = argv[1];
-    YamlConfig yaml;
-    if (!yaml.load(scene_file)) {
-        fprintf(stderr, "Error: could not load %s\n", scene_file);
-        return 1;
-    }
-    std::string version = yaml.get_string("version");
-    if (version != "nanore@2") {
-        fprintf(stderr, "Error: unsupported scene version '%s' (expected nanore@2)\n", version.c_str());
-        return 1;
-    }
-    SC.load_from_yaml(yaml);
-    printf("Loaded scene: %s\n", scene_file);
+// --- Module-level render state ---
+static uint8_t* g_pixels = nullptr;
+static float* g_hdr = nullptr;
+static float* g_zbuf = nullptr;
+static std::atomic<int> g_next_row(0);
+static std::atomic<int> g_rows_done(0);
+static std::atomic<bool> g_cancel(false);
 
+static void init_scene(YamlConfig& yaml) {
+    SC = SceneConfig();
+    SC.load_from_yaml(yaml);
+    centers.clear();
+    torus_colors.clear();
+    tile_heights.clear();
+    rcube_subs.clear();
+    glass_subs.clear();
+    tile_glass.clear();
     init_tiles();
     init_glass();
     init_rcubes();
     init_centers();
-
-    // Generate random emissive colors for tori
     torus_colors.clear();
-    {
-        uint32_t tseed = 777u;
-        for (size_t i = 0; i < centers.size(); i++) {
-            torus_colors.push_back(Vec(
-                rcube_randf(tseed) * 2.0 + 0.5,
-                rcube_randf(tseed) * 2.0 + 0.5,
-                rcube_randf(tseed) * 2.0 + 0.5));
-        }
+    uint32_t tseed = 777u;
+    for (size_t i = 0; i < centers.size(); i++) {
+        torus_colors.push_back(Vec(
+            rcube_randf(tseed) * 2.0 + 0.5,
+            rcube_randf(tseed) * 2.0 + 0.5,
+            rcube_randf(tseed) * 2.0 + 0.5));
     }
+}
 
+static void run_render_pipeline() {
     int W = SC.width, H = SC.height;
-    printf("nanore ray tracer\n");
-    printf("  Resolution: %dx%d, %d samples/pixel\n", W, H, SC.samples);
-    printf("  %zu spheres (r=%.1f), %d displaced cubes + glass\n", centers.size(), SC.sph_r, SC.tile_nx * SC.tile_nz);
-    if (SC.rcube_count > 1)
-        printf("  %d rounded reflective sub-cubes (edge %.1f-%.1f, spread=%.1f)\n",
-               SC.rcube_count, SC.rcube_half_min * 2, SC.rcube_half_max * 2, SC.rcube_spread);
-    else
-        printf("  Rounded reflective cube (edge=%.0f, round=%.1f) behind text\n", SC.rcube_half * 2, SC.rcube_round);
-    printf("  Blue + yellow dual lighting, shiny floor\n");
-    fflush(stdout);
+
+    delete[] g_pixels; delete[] g_hdr; delete[] g_zbuf;
+    g_pixels = new uint8_t[W * H * 3]();
+    g_hdr = new float[W * H * 3]();
+    g_zbuf = new float[W * H]();
 
     Vec fwd = (SC.target - SC.cam).norm();
     Vec right = fwd.cross(Vec(0, 1, 0)).norm();
     Vec up = right.cross(fwd);
 
-    auto* pixels = new uint8_t[W * H * 3];
-    auto* hdr = new float[W * H * 3];
-    auto* zbuf = new float[W * H];
+    g_next_row.store(0);
+    g_rows_done.store(0);
+    g_cancel.store(false);
 
     int num_threads = std::max(1, (int)std::thread::hardware_concurrency());
+#ifdef __EMSCRIPTEN__
+    if (num_threads > 8) num_threads = 8;
+#endif
     printf("  Using %d threads\n", num_threads);
     fflush(stdout);
 
-    std::atomic<int> next_row(0);
-    std::atomic<int> rows_done(0);
     auto start = clock();
 
     auto worker = [&]() {
         rng.seed(std::random_device{}());
         while (true) {
-            int y = next_row.fetch_add(1);
+            if (g_cancel.load()) return;
+            int y = g_next_row.fetch_add(1);
             if (y >= H) break;
             for (int x = 0; x < W; x++) {
                 Vec color;
@@ -1470,16 +1502,14 @@ int main(int argc, char* argv[]) {
                 }
                 color = color * (1.0 / SC.samples);
                 int idx = (y * W + x) * 3;
-                hdr[idx]   = (float)color.x;
-                hdr[idx+1] = (float)color.y;
-                hdr[idx+2] = (float)color.z;
-                zbuf[y * W + x] = (float)(depth_sum / SC.samples);
+                g_hdr[idx]   = (float)color.x;
+                g_hdr[idx+1] = (float)color.y;
+                g_hdr[idx+2] = (float)color.z;
+                g_zbuf[y * W + x] = (float)(depth_sum / SC.samples);
             }
-            int done = rows_done.fetch_add(1) + 1;
+            int done = g_rows_done.fetch_add(1) + 1;
             if (done % 32 == 0) {
-                double elapsed = (double)(clock() - start) / CLOCKS_PER_SEC;
-                double eta_s = elapsed / done * (H - done);
-                printf("  Rendering... %d%% (ETA: %.0fs)\n", done * 100 / H, eta_s);
+                printf("  Rendering... %d%%\n", done * 100 / H);
                 fflush(stdout);
             }
         }
@@ -1492,6 +1522,8 @@ int main(int argc, char* argv[]) {
     double elapsed = (double)(clock() - start) / CLOCKS_PER_SEC;
     printf("  Render time: %.1fs CPU (%.1fs wall)\n", elapsed, elapsed / num_threads);
     fflush(stdout);
+
+    if (g_cancel.load()) return;
 
     // Bloom post-processing
     printf("  Applying glow filter (r=%d)...\n", SC.bloom_r); fflush(stdout);
@@ -1507,11 +1539,10 @@ int main(int argc, char* argv[]) {
 
     auto* bloom = new float[W * H * 3]();
     for (int i = 0; i < W * H * 3; i++) {
-        float v = hdr[i];
+        float v = g_hdr[i];
         bloom[i] = (v > SC.bloom_threshold) ? (v - (float)SC.bloom_threshold) : 0.0f;
     }
 
-    // Horizontal blur
     auto* temp = new float[W * H * 3]();
     for (int y = 0; y < H; y++) {
         for (int x = 0; x < W; x++) {
@@ -1529,7 +1560,6 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    // Vertical blur
     for (int y = 0; y < H; y++) {
         for (int x = 0; x < W; x++) {
             double r = 0, g = 0, b = 0;
@@ -1546,14 +1576,130 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    // Combine + gamma
     for (int i = 0; i < W * H * 3; i++) {
-        double v = hdr[i] + bloom[i] * SC.bloom_intensity;
-        pixels[i] = clamp(std::pow(v, SC.gamma));
+        double v = g_hdr[i] + bloom[i] * SC.bloom_intensity;
+        g_pixels[i] = clamp(std::pow(v, SC.gamma));
     }
     delete[] bloom;
     delete[] temp;
     printf("  Glow applied.\n"); fflush(stdout);
+}
+
+// --- Emscripten WASM exports ---
+#ifdef __EMSCRIPTEN__
+
+static std::thread* g_render_thread = nullptr;
+static std::atomic<bool> g_render_done(true);
+static std::atomic<int> g_render_result(0);
+static std::string g_yaml_copy;
+
+static void render_thread_func() {
+    YamlConfig yaml;
+    if (!yaml.load_from_string(g_yaml_copy.c_str())) {
+        g_render_result.store(-1);
+        g_render_done.store(true);
+        return;
+    }
+    std::string version = yaml.get_string("version");
+    if (version != "nanore@2") {
+        g_render_result.store(-2);
+        g_render_done.store(true);
+        return;
+    }
+    init_scene(yaml);
+    printf("nanore ray tracer\n");
+    printf("  Resolution: %dx%d, %d samples/pixel\n", SC.width, SC.height, SC.samples);
+    fflush(stdout);
+    run_render_pipeline();
+    g_render_result.store(g_cancel.load() ? 1 : 0);
+    g_render_done.store(true);
+}
+
+extern "C" {
+
+EMSCRIPTEN_KEEPALIVE
+int start_render(const char* yaml_str) {
+    // Join previous render thread if any
+    if (g_render_thread) {
+        g_cancel.store(true);
+        g_render_thread->join();
+        delete g_render_thread;
+        g_render_thread = nullptr;
+    }
+    g_yaml_copy = yaml_str;
+    g_render_done.store(false);
+    g_render_result.store(0);
+    g_cancel.store(false);
+    g_render_thread = new std::thread(render_thread_func);
+    return 0;
+}
+
+EMSCRIPTEN_KEEPALIVE
+void cancel_render() { g_cancel.store(true); }
+
+EMSCRIPTEN_KEEPALIVE
+int is_render_done() { return g_render_done.load() ? 1 : 0; }
+
+EMSCRIPTEN_KEEPALIVE
+int get_render_result() { return g_render_result.load(); }
+
+EMSCRIPTEN_KEEPALIVE
+int get_progress() {
+    int H = SC.height;
+    return (H > 0) ? g_rows_done.load() * 100 / H : 0;
+}
+
+EMSCRIPTEN_KEEPALIVE
+uint8_t* get_pixels_ptr() { return g_pixels; }
+
+EMSCRIPTEN_KEEPALIVE
+float* get_zbuf_ptr() { return g_zbuf; }
+
+EMSCRIPTEN_KEEPALIVE
+int get_width() { return SC.width; }
+
+EMSCRIPTEN_KEEPALIVE
+int get_height() { return SC.height; }
+
+} // extern "C"
+
+int main() { return 0; }
+
+#else
+// --- Native CLI entry point ---
+
+int main(int argc, char* argv[]) {
+    if (argc < 2) {
+        fprintf(stderr, "Usage: %s <scene.yaml>\n", argv[0]);
+        return 1;
+    }
+    const char* scene_file = argv[1];
+    YamlConfig yaml;
+    if (!yaml.load(scene_file)) {
+        fprintf(stderr, "Error: could not load %s\n", scene_file);
+        return 1;
+    }
+    std::string version = yaml.get_string("version");
+    if (version != "nanore@2") {
+        fprintf(stderr, "Error: unsupported scene version '%s' (expected nanore@2)\n", version.c_str());
+        return 1;
+    }
+    init_scene(yaml);
+    printf("Loaded scene: %s\n", scene_file);
+
+    int W = SC.width, H = SC.height;
+    printf("nanore ray tracer\n");
+    printf("  Resolution: %dx%d, %d samples/pixel\n", W, H, SC.samples);
+    printf("  %zu spheres (r=%.1f), %d displaced cubes + glass\n", centers.size(), SC.sph_r, SC.tile_nx * SC.tile_nz);
+    if (SC.rcube_count > 1)
+        printf("  %d rounded reflective sub-cubes (edge %.1f-%.1f, spread=%.1f)\n",
+               SC.rcube_count, SC.rcube_half_min * 2, SC.rcube_half_max * 2, SC.rcube_spread);
+    else
+        printf("  Rounded reflective cube (edge=%.0f, round=%.1f) behind text\n", SC.rcube_half * 2, SC.rcube_round);
+    printf("  Blue + yellow dual lighting, shiny floor\n");
+    fflush(stdout);
+
+    run_render_pipeline();
 
     // Build output path: renders/render-<timestamp>.bmp
     mkdir("renders", 0755);
@@ -1584,7 +1730,7 @@ int main(int argc, char* argv[]) {
     for (int y = H - 1; y >= 0; y--) {
         for (int x = 0; x < W; x++) {
             int idx = (y * W + x) * 3;
-            uint8_t bgr[3] = {pixels[idx+2], pixels[idx+1], pixels[idx]};
+            uint8_t bgr[3] = {g_pixels[idx+2], g_pixels[idx+1], g_pixels[idx]};
             fwrite(bgr, 1, 3, f);
         }
         if (pad) fwrite(padding, 1, pad, f);
@@ -1599,7 +1745,7 @@ int main(int argc, char* argv[]) {
         for (int y = H - 1; y >= 0; y--) {
             for (int x = 0; x < W; x++) {
                 int idx = (y * W + x) * 3;
-                uint8_t bgr[3] = {pixels[idx+2], pixels[idx+1], pixels[idx]};
+                uint8_t bgr[3] = {g_pixels[idx+2], g_pixels[idx+1], g_pixels[idx]};
                 fwrite(bgr, 1, 3, fl);
             }
             if (pad) fwrite(padding, 1, pad, fl);
@@ -1608,15 +1754,14 @@ int main(int argc, char* argv[]) {
         printf("  Saved to renders/latest.bmp\n");
     }
 
-    // Z-buffer: find min/max depth for normalization
-    float zmin = zbuf[0], zmax = zbuf[0];
+    // Z-buffer output
+    float zmin = g_zbuf[0], zmax = g_zbuf[0];
     for (int i = 1; i < W * H; i++) {
-        if (zbuf[i] < zmin) zmin = zbuf[i];
-        if (zbuf[i] > zmax) zmax = zbuf[i];
+        if (g_zbuf[i] < zmin) zmin = g_zbuf[i];
+        if (g_zbuf[i] > zmax) zmax = g_zbuf[i];
     }
     float zrange = (zmax - zmin > 1e-6f) ? (zmax - zmin) : 1.0f;
 
-    // Write z-buffer as grayscale BMP
     auto write_zbmp = [&](const char* path) {
         FILE* zf = fopen(path, "wb");
         if (!zf) return;
@@ -1639,7 +1784,7 @@ int main(int argc, char* argv[]) {
         uint8_t zpadding[4] = {};
         for (int y = H - 1; y >= 0; y--) {
             for (int x = 0; x < W; x++) {
-                float norm = (zbuf[y * W + x] - zmin) / zrange;
+                float norm = (g_zbuf[y * W + x] - zmin) / zrange;
                 uint8_t v = (uint8_t)(std::clamp(1.0f - norm, 0.0f, 1.0f) * 255.0f);
                 uint8_t gray[3] = {v, v, v};
                 fwrite(gray, 1, 3, zf);
@@ -1650,14 +1795,14 @@ int main(int argc, char* argv[]) {
         printf("  Saved to %s\n", path);
     };
 
-    // Build z-buffer output path
     char zpath[256];
     strftime(zpath, sizeof(zpath), "renders/render-%Y%m%d-%H%M%S_z.bmp", t);
     write_zbmp(zpath);
     write_zbmp("renders/latest_z.bmp");
 
-    delete[] zbuf;
-    delete[] hdr;
-    delete[] pixels;
+    delete[] g_zbuf;
+    delete[] g_hdr;
+    delete[] g_pixels;
     return 0;
 }
+#endif
