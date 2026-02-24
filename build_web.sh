@@ -13,9 +13,11 @@ em++ src/nanore.cpp \
   -sINITIAL_MEMORY=134217728 \
   -sPTHREAD_POOL_SIZE='navigator.hardwareConcurrency+1' \
   -sEXPORTED_FUNCTIONS='["_main","_start_render","_cancel_render","_is_render_done","_get_render_result","_get_progress","_get_pixels_ptr","_get_zbuf_ptr","_get_width","_get_height","_malloc","_free"]' \
-  -sEXPORTED_RUNTIME_METHODS='["ccall","cwrap","stringToUTF8","lengthBytesUTF8"]' \
+  -sEXPORTED_RUNTIME_METHODS='["ccall","cwrap","stringToUTF8","lengthBytesUTF8","wasmMemory"]' \
   -sENVIRONMENT=web,worker \
   -o dist/nanore.js
+
+cp web/coi-serviceworker.js dist/
 
 echo "Embedding default scene YAML into index.html..."
 
@@ -24,6 +26,10 @@ with open('scenes/nanotekt.yaml', 'r') as f:
     yaml = f.read()
 with open('web/index.html', 'r') as f:
     html = f.read()
+import re
+yaml = re.sub(r'^  width: \d+', '  width: 256', yaml, count=1, flags=re.MULTILINE)
+yaml = re.sub(r'^  height: \d+', '  height: 256', yaml, count=1, flags=re.MULTILINE)
+yaml = re.sub(r'^  samples: \d+', '  samples: 1', yaml, count=1, flags=re.MULTILINE)
 html = html.replace('__DEFAULT_YAML__', yaml.rstrip())
 with open('dist/index.html', 'w') as f:
     f.write(html)

@@ -44,7 +44,7 @@ canvas{max-width:100%;max-height:100%;image-rendering:auto}
         <div id="progress-text">0%</div>
       </div>
     </div>
-    <div id="status"></div>
+    <div id="status">Loading WASM...</div>
   </div>
   <div id="editor-panel">
     <div id="editor-header">
@@ -56,10 +56,18 @@ canvas{max-width:100%;max-height:100%;image-rendering:auto}
   </div>
 </div>
 
+<script src="coi-serviceworker.js"></script>
 <script>
+// Module config MUST be set before nanore.js loads
 var Module = {
-  print: function(text) { console.log(text); },
-  printErr: function(text) { console.warn(text); }
+  print: function(text) { console.log('[nanore]', text); },
+  printErr: function(text) { console.warn('[nanore]', text); },
+  onRuntimeInitialized: function() {
+    console.log('[nanore] Runtime initialized');
+    document.getElementById('status').textContent = 'Ready — starting render...';
+    // Delay to let pthread pool workers finish loading
+    setTimeout(function() { window._nanoreReady = true; window._nanoreStart(); }, 500);
+  }
 };
 </script>
 <script src="nanore.js"></script>
@@ -82,7 +90,6 @@ var Module = {
   var colorImageData = null;
   var zbufImageData = null;
   var pendingRender = false;
-  var moduleReady = false;
   var t0 = 0;
 
   // SharedArrayBuffer check
@@ -95,22 +102,17 @@ var Module = {
     return;
   }
 
-  Module.onRuntimeInitialized = function() {
-    moduleReady = true;
-    statusEl.textContent = 'Ready';
+  // Called by onRuntimeInitialized after delay
+  window._nanoreStart = function() {
+    console.log('[nanore] Starting initial render');
     startRender();
   };
 
-  function callWasm(name) {
-    return Module['_' + name];
-  }
-
   function startRender() {
-    if (!moduleReady) return;
+    if (!window._nanoreReady) return;
 
     if (isRendering) {
-      // Cancel current render, queue a new one
-      callWasm('cancel_render')();
+      Module._cancel_render();
       pendingRender = true;
       return;
     }
@@ -126,47 +128,68 @@ var Module = {
     statusEl.textContent = 'Rendering...';
     t0 = performance.now();
 
-    // Allocate YAML string in WASM memory and call start_render
-    var yamlBytes = Module.lengthBytesUTF8(yaml) + 1;
-    var yamlPtr = Module._malloc(yamlBytes);
-    Module.stringToUTF8(yaml, yamlPtr, yamlBytes);
-    callWasm('start_render')(yamlPtr);
-    Module._free(yamlPtr);
-
-    // Poll for progress and completion
-    pollTimer = setInterval(pollRender, 150);
-  }
-
-  function pollRender() {
-    var pct = callWasm('get_progress')();
-    progressFill.style.width = pct + '%';
-    progressText.textContent = pct + '%';
-
-    if (callWasm('is_render_done')()) {
-      clearInterval(pollTimer);
-      pollTimer = null;
-
-      var result = callWasm('get_render_result')();
+    try {
+      // Allocate YAML string in WASM memory and call start_render
+      var yamlBytes = Module.lengthBytesUTF8(yaml) + 1;
+      var yamlPtr = Module._malloc(yamlBytes);
+      Module.stringToUTF8(yaml, yamlPtr, yamlBytes);
+      Module._start_render(yamlPtr);
+      Module._free(yamlPtr);
+      console.log('[nanore] Render started');
+    } catch (e) {
+      console.error('[nanore] start_render failed:', e);
+      showError('Failed to start render: ' + e.message);
       isRendering = false;
       renderBtn.disabled = false;
       overlay.style.display = 'none';
+      return;
+    }
 
-      if (result === 0) {
-        var elapsed = ((performance.now() - t0) / 1000).toFixed(1);
-        statusEl.textContent = 'Done in ' + elapsed + 's';
-        captureResults();
-        drawActiveTab();
-      } else if (result === 1) {
-        statusEl.textContent = 'Cancelled';
-      } else if (result === -1) {
-        showError('YAML parse error');
-      } else if (result === -2) {
-        showError('Version must be nanore@2');
-      }
+    // Poll for progress and completion
+    pollTimer = setInterval(pollRender, 200);
+  }
 
-      if (pendingRender) {
-        setTimeout(startRender, 50);
+  function pollRender() {
+    try {
+      var pct = Module._get_progress();
+      progressFill.style.width = pct + '%';
+      progressText.textContent = pct + '%';
+
+      if (Module._is_render_done()) {
+        clearInterval(pollTimer);
+        pollTimer = null;
+
+        var result = Module._get_render_result();
+        console.log('[nanore] Render done, result=' + result);
+        isRendering = false;
+        renderBtn.disabled = false;
+        overlay.style.display = 'none';
+
+        if (result === 0) {
+          var elapsed = ((performance.now() - t0) / 1000).toFixed(1);
+          statusEl.textContent = 'Done in ' + elapsed + 's';
+          captureResults();
+          drawActiveTab();
+        } else if (result === 1) {
+          statusEl.textContent = 'Cancelled';
+        } else if (result === -1) {
+          showError('YAML parse error');
+        } else if (result === -2) {
+          showError('Version must be nanore@2');
+        }
+
+        if (pendingRender) {
+          setTimeout(startRender, 100);
+        }
       }
+    } catch (e) {
+      console.error('[nanore] Poll error:', e);
+      clearInterval(pollTimer);
+      pollTimer = null;
+      isRendering = false;
+      renderBtn.disabled = false;
+      overlay.style.display = 'none';
+      showError('Render error: ' + e.message);
     }
   }
 
@@ -176,16 +199,24 @@ var Module = {
     statusEl.textContent = 'Error';
   }
 
+  function getMemoryBuffer() {
+    // Always get a fresh buffer reference — handles memory growth
+    return Module.wasmMemory ? Module.wasmMemory.buffer : Module.HEAPU8.buffer;
+  }
+
   function captureResults() {
-    var W = callWasm('get_width')();
-    var H = callWasm('get_height')();
+    var W = Module._get_width();
+    var H = Module._get_height();
+    console.log('[nanore] Capturing results ' + W + 'x' + H);
     canvas.width = W;
     canvas.height = H;
 
-    // Color buffer
-    var pixPtr = callWasm('get_pixels_ptr')();
+    // Color buffer — use fresh view from wasmMemory to handle memory growth
+    var pixPtr = Module._get_pixels_ptr();
+    console.log('[nanore] pixPtr=' + pixPtr);
     if (pixPtr) {
-      var pix = Module.HEAPU8.subarray(pixPtr, pixPtr + W * H * 3);
+      var buf = getMemoryBuffer();
+      var pix = new Uint8Array(buf, pixPtr, W * H * 3);
       colorImageData = ctx.createImageData(W, H);
       var d = colorImageData.data;
       for (var i = 0; i < W * H; i++) {
@@ -194,12 +225,15 @@ var Module = {
         d[i * 4 + 2] = pix[i * 3 + 2];
         d[i * 4 + 3] = 255;
       }
+      console.log('[nanore] Color captured, first pixel: ' + d[0] + ',' + d[1] + ',' + d[2]);
     }
 
     // Z-buffer
-    var zPtr = callWasm('get_zbuf_ptr')();
+    var zPtr = Module._get_zbuf_ptr();
+    console.log('[nanore] zPtr=' + zPtr);
     if (zPtr) {
-      var zbuf = new Float32Array(Module.HEAPF32.buffer, zPtr, W * H);
+      var buf = getMemoryBuffer();
+      var zbuf = new Float32Array(buf, zPtr, W * H);
       var zmin = zbuf[0], zmax = zbuf[0];
       for (var i = 1; i < W * H; i++) {
         if (zbuf[i] < zmin) zmin = zbuf[i];
@@ -226,6 +260,7 @@ var Module = {
       canvas.width = img.width;
       canvas.height = img.height;
       ctx.putImageData(img, 0, 0);
+      console.log('[nanore] Drew ' + activeTab + ' ' + img.width + 'x' + img.height);
     }
   }
 
