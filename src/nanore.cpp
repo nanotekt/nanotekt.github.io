@@ -319,6 +319,14 @@ struct SceneConfig {
     };
     std::vector<TextBlock> text_blocks;
 
+    // Standalone spheres (glass + chrome inner)
+    struct StandaloneSphere {
+        Vec center;
+        double glass_radius;
+        double chrome_radius;
+    };
+    std::vector<StandaloneSphere> standalone_spheres;
+
     // Derived values
     double sph_r2, rcube_bound_r, rcube_bound_r2, disc_r2;
     double glass_max_y;
@@ -447,6 +455,12 @@ struct SceneConfig {
                 torus_major_mult = cfg.get_double(p + "major_mult", torus_major_mult);
                 torus_minor = cfg.get_double(p + "minor", torus_minor);
                 torus_emissive_intensity = cfg.get_double(p + "intensity", torus_emissive_intensity);
+            } else if (type == "sphere") {
+                StandaloneSphere ss;
+                ss.center = cfg.get_vec(p + "center", Vec(0, 0, 0));
+                ss.glass_radius = cfg.get_double(p + "glass_radius", 2.0);
+                ss.chrome_radius = cfg.get_double(p + "chrome_radius", 1.0);
+                standalone_spheres.push_back(ss);
             }
         }
 
@@ -519,6 +533,8 @@ static SceneConfig SC;
 struct SphCenter { double x, y, z; };
 static std::vector<SphCenter> centers;
 static std::vector<Vec> torus_colors;
+static std::vector<Mat3> torus_rot;
+static std::vector<Mat3> torus_rot_inv;
 
 // Tile heights (dynamic — bounds come from YAML)
 static std::vector<double> tile_heights;
@@ -826,6 +842,7 @@ static thread_local GlassInfo glass_hit = {0, 0, 0, 0, 0, 0};
 
 // Thread-local sphere index for scratch perturbation
 static thread_local int hit_sphere_idx = 0;
+static thread_local int hit_standalone_idx = 0;
 
 struct HitResult {
     double t;
@@ -992,21 +1009,24 @@ static HitResult test(const Vec& o, const Vec& d, bool skip_tiles = false) {
                 }
             }
 
-            // Emissive torus (m=8) — SDF ray march
+            // Emissive torus (m=8) — SDF ray march with per-torus rotation
             double tdisc = b*b - (d2 - torus_bound_r2);
             if (tdisc >= 0) {
                 double tsq = std::sqrt(tdisc);
                 double t_near = -b - tsq;
                 double t_far = -b + tsq;
                 if (t_far > 0.01 && t_near < t) {
+                    const Mat3& tr = torus_rot[ci];
+                    const Mat3& tri = torus_rot_inv[ci];
                     double tt = std::max(t_near, 0.01);
                     for (int step = 0; step < 48; step++) {
                         Vec lp(ox + dx*tt - c.x, oy + dy*tt - c.y, oz + dz*tt - c.z);
-                        double dist = sdf_torus(lp, torus_major, SC.torus_minor);
+                        Vec rp = tr.mul(lp);
+                        double dist = sdf_torus(rp, torus_major, SC.torus_minor);
                         if (dist < 0.001) {
                             if (tt < t) {
                                 t = tt;
-                                n = sdf_torus_normal(lp, torus_major, SC.torus_minor);
+                                n = tri.mul(sdf_torus_normal(rp, torus_major, SC.torus_minor));
                                 m = 8;
                                 hit_sphere_idx = ci;
                             }
@@ -1016,6 +1036,46 @@ static HitResult test(const Vec& o, const Vec& d, bool skip_tiles = false) {
                         if (tt > std::min(t_far, t)) break;
                     }
                 }
+            }
+        }
+    }
+
+    // Standalone spheres (glass + chrome inner)
+    for (int si = 0; si < (int)SC.standalone_spheres.size(); si++) {
+        const auto& ss = SC.standalone_spheres[si];
+        double spx = ox - ss.center.x, spy = oy - ss.center.y, spz = oz - ss.center.z;
+        double sb = spx*dx + spy*dy + spz*dz;
+        double sd2 = spx*spx + spy*spy + spz*spz;
+
+        // Glass outer sphere (m=10)
+        double gr2 = ss.glass_radius * ss.glass_radius;
+        double gdisc = sb*sb - (sd2 - gr2);
+        if (gdisc >= 0) {
+            double gsq = std::sqrt(gdisc);
+            double gtt = -sb - gsq;
+            if (gtt < 0.01) gtt = -sb + gsq;
+            if (gtt > 0.01 && gtt < t) {
+                t = gtt;
+                double inv_r = 1.0 / ss.glass_radius;
+                n = Vec((ox + dx*gtt - ss.center.x) * inv_r, (oy + dy*gtt - ss.center.y) * inv_r, (oz + dz*gtt - ss.center.z) * inv_r);
+                m = 10;
+                hit_standalone_idx = si;
+            }
+        }
+
+        // Chrome inner sphere (m=11)
+        double cr2 = ss.chrome_radius * ss.chrome_radius;
+        double cdisc = sb*sb - (sd2 - cr2);
+        if (cdisc >= 0) {
+            double csq = std::sqrt(cdisc);
+            double ctt = -sb - csq;
+            if (ctt < 0.01) ctt = -sb + csq;
+            if (ctt > 0.01 && ctt < t) {
+                t = ctt;
+                double inv_r = 1.0 / ss.chrome_radius;
+                n = Vec((ox + dx*ctt - ss.center.x) * inv_r, (oy + dy*ctt - ss.center.y) * inv_r, (oz + dz*ctt - ss.center.z) * inv_r);
+                m = 11;
+                hit_standalone_idx = si;
             }
         }
     }
@@ -1197,6 +1257,68 @@ static Vec trace(const Vec& o, const Vec& d, int depth) {
     }
     if (m == 7) {
         return depth < SC.gsph_passthrough_depth ? trace(hit + d * 0.02, d, depth + 1) : Vec();
+    }
+    // Standalone glass sphere (m=10)
+    if (m == 10 && depth < SC.gsph_max_depth) {
+        const auto& ss = SC.standalone_spheres[hit_standalone_idx];
+        double cos_i = -(d.dot(n));
+        Vec nn = n;
+        if (cos_i < 0) { cos_i = -cos_i; nn = n * -1; }
+        double fresnel = SC.gsph_r0 + (1 - SC.gsph_r0) * std::pow(1 - cos_i, 5);
+        Vec r = d - nn * (2 * d.dot(nn));
+        Vec transmitted(0, 0, 0);
+        double eta = 1.0 / SC.gsph_ior;
+        double k = 1.0 - eta * eta * (1.0 - cos_i * cos_i);
+        if (k > 0) {
+            Vec refr = d * eta + nn * (eta * cos_i - std::sqrt(k));
+            Vec entry = hit + refr * 0.02;
+            double epx = entry.x - ss.center.x, epy = entry.y - ss.center.y, epz = entry.z - ss.center.z;
+            double eb = epx*refr.x + epy*refr.y + epz*refr.z;
+            double edisc = eb*eb - (epx*epx + epy*epy + epz*epz - ss.glass_radius*ss.glass_radius);
+            if (edisc > 0) {
+                double exit_t = -eb + std::sqrt(edisc);
+                if (exit_t > 0) {
+                    Vec exit_pt = entry + refr * exit_t;
+                    Vec en = (exit_pt - ss.center) * (1.0 / ss.glass_radius);
+                    double cos_o = -(refr.dot(en));
+                    if (cos_o < 0) { cos_o = -cos_o; en = en * -1; }
+                    double eta2 = SC.gsph_ior;
+                    double k2 = 1.0 - eta2 * eta2 * (1.0 - cos_o * cos_o);
+                    if (k2 > 0) {
+                        Vec exit_refr = refr * eta2 + en * (eta2 * cos_o - std::sqrt(k2));
+                        transmitted = trace(exit_pt + exit_refr * 0.02, exit_refr, depth + 1);
+                    } else {
+                        Vec refl_int = refr - en * (2 * refr.dot(en));
+                        transmitted = trace(exit_pt + refl_int * 0.02, refl_int, depth + 1);
+                    }
+                    double pl = exit_t * SC.gsph_tint_scale;
+                    transmitted = Vec(transmitted.x * (1 - pl*SC.gsph_tint_rgb.x),
+                                      transmitted.y * (1 - pl*SC.gsph_tint_rgb.y),
+                                      transmitted.z * (1 - pl*SC.gsph_tint_rgb.z));
+                }
+            }
+        } else {
+            fresnel = 1.0;
+        }
+        Vec reflected = fresnel > 0.02 ? trace(hit + nn * 0.02, r, depth + 1) : Vec();
+        Vec base = reflected * fresnel + transmitted * (1.0 - fresnel);
+        double sp1 = std::pow(std::max(0.0, light1.dot(r)), SC.gsph_spec_power) * s1;
+        double sp2 = std::pow(std::max(0.0, light2.dot(r)), SC.gsph_spec_power) * s2;
+        return base + L1 * (sp1 * SC.gsph_spec_intensity) + L2 * (sp2 * SC.gsph_spec_intensity);
+    }
+    if (m == 10) {
+        return depth < SC.gsph_passthrough_depth ? trace(hit + d * 0.02, d, depth + 1) : Vec();
+    }
+    // Standalone chrome sphere (m=11) — same as m=5/9 chrome shading
+    if (m == 11) {
+        Vec r = d - n * (2 * d.dot(n));
+        double diff = std::max(0.0, n.dot(light1)) * s1 + std::max(0.0, n.dot(light2)) * s2;
+        Vec refl = depth < SC.chrome_max_depth ? trace(hit + n * 0.02, r, depth + 1) : Vec();
+        double sp1 = std::pow(std::max(0.0, light1.dot(r)), SC.chrome_spec_power) * s1;
+        double sp2 = std::pow(std::max(0.0, light2.dot(r)), SC.chrome_spec_power) * s2;
+        Vec col = SC.chrome_color * (diff * SC.chrome_diffuse + SC.chrome_ambient);
+        col = col * SC.chrome_refl_base + refl * SC.chrome_refl_mirror;
+        return col + L1 * (sp1 * SC.chrome_spec_intensity) + L2 * (sp2 * SC.chrome_spec_intensity);
     }
     if (m == 4 && depth < SC.glass_max_depth) {
         // Glass cube — refraction + reflection
@@ -1446,12 +1568,30 @@ static void init_scene(YamlConfig& yaml) {
     init_rcubes();
     init_centers();
     torus_colors.clear();
+    torus_rot.clear();
+    torus_rot_inv.clear();
     uint32_t tseed = 777u;
     for (size_t i = 0; i < centers.size(); i++) {
-        torus_colors.push_back(Vec(
-            rcube_randf(tseed) * 2.0 + 0.5,
-            rcube_randf(tseed) * 2.0 + 0.5,
-            rcube_randf(tseed) * 2.0 + 0.5));
+        // Saturated HDR color from random hue
+        double hue = rcube_randf(tseed) * 6.0;
+        int hi = (int)hue;
+        double f = hue - hi;
+        double cr, cg, cb;
+        switch (hi % 6) {
+            case 0: cr=2.5; cg=f*2.5;     cb=0.05; break;
+            case 1: cr=(1-f)*2.5; cg=2.5; cb=0.05; break;
+            case 2: cr=0.05; cg=2.5;      cb=f*2.5; break;
+            case 3: cr=0.05; cg=(1-f)*2.5; cb=2.5; break;
+            case 4: cr=f*2.5;  cg=0.05;   cb=2.5; break;
+            default: cr=2.5;  cg=0.05;    cb=(1-f)*2.5; break;
+        }
+        torus_colors.push_back(Vec(cr, cg, cb));
+        Mat3 r = make_rotation(
+            rcube_randf(tseed) * 6.2832,
+            rcube_randf(tseed) * 6.2832,
+            rcube_randf(tseed) * 6.2832);
+        torus_rot.push_back(r);
+        torus_rot_inv.push_back(r.transpose());
     }
 }
 

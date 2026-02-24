@@ -3,7 +3,7 @@ version: nanore@2
 rendering:
   width: 1024
   height: 1024
-  samples: 4
+  samples: 32
   fog_max_dist: 80.0
 
 camera:
@@ -85,7 +85,7 @@ objects:
     color: [0.3, 0.5, 1.0]
   inner_chrome:
     type: reflective_sphere
-    radius_mult: 0.625
+    radius_mult: 0.5
   sphere_glass:
     type: glass_sphere
     radius_mult: 1.25
@@ -99,21 +99,26 @@ objects:
     passthrough_depth: 6
   sphere_torus:
     type: emissive_torus
-    major_mult: 3.125
-    minor: 0.07
-    intensity: 2.0
+    major_mult: 1.25
+    minor: 0.1
+    intensity: 1.0
   with_love:
     type: text
-    string: with love
+    string: WITH LOVE
     position: [-13.5, 9.0, -14.0]
     col_spacing: 0.5
     row_spacing: 0.5
   skmp:
     type: text
-    string: skmp
+    string: SKMP
     position: [-3.0, 5.0, -7.0]
     col_spacing: 0.5
     row_spacing: 0.5
+  big_sphere:
+    type: sphere
+    center: [-3.0, 5.0, -5.0]
+    glass_radius: 2.0
+    chrome_radius: 1.0
 
 materials:
   chrome:
