@@ -1725,8 +1725,16 @@ static void run_render_pipeline() {
     printf("  Glow applied.\n"); fflush(stdout);
 }
 
-// --- Emscripten WASM exports ---
-#ifdef __EMSCRIPTEN__
+// --- Async render API (WASM + GUI) ---
+#if defined(__EMSCRIPTEN__) || defined(NANORE_GUI)
+
+#ifndef __EMSCRIPTEN__
+#define EMSCRIPTEN_KEEPALIVE
+#endif
+
+#ifdef NANORE_GUI
+#include "gui.h"
+#endif
 
 static std::thread* g_render_thread = nullptr;
 static std::atomic<bool> g_render_done(true);
@@ -1803,15 +1811,82 @@ int get_height() { return SC.height; }
 
 } // extern "C"
 
+#endif // defined(__EMSCRIPTEN__) || defined(NANORE_GUI)
+
+// --- Geometry accessors for GUI wireframe views ---
+#ifdef NANORE_GUI
+extern "C" {
+
+int get_sphere_count() { return (int)centers.size(); }
+void get_sphere_center(int i, double* x, double* y, double* z) {
+    *x = centers[i].x; *y = centers[i].y; *z = centers[i].z;
+}
+double get_sphere_radius() { return SC.sph_r; }
+
+int get_rcube_count() { return (int)rcube_subs.size(); }
+void get_rcube_info(int i, double* cx, double* cy, double* cz, double* half, double* round_) {
+    auto& s = rcube_subs[i];
+    *cx = s.center.x; *cy = s.center.y; *cz = s.center.z;
+    *half = s.half_edge; *round_ = s.rounding;
+}
+
+void get_disc_info(double* cx, double* cy, double* cz, double* r) {
+    *cx = SC.disc_center.x; *cy = SC.disc_center.y; *cz = SC.disc_center.z; *r = SC.disc_r;
+}
+
+void get_floor_bounds(int* lox, int* hix, int* loz, int* hiz) {
+    *lox = SC.tile_lo_x; *hix = SC.tile_hi_x; *loz = SC.tile_lo_z; *hiz = SC.tile_hi_z;
+}
+
+void get_camera_info(double* px, double* py, double* pz, double* tx, double* ty, double* tz) {
+    *px = SC.cam.x; *py = SC.cam.y; *pz = SC.cam.z;
+    *tx = SC.target.x; *ty = SC.target.y; *tz = SC.target.z;
+}
+
+int get_light_count() { return 2; }
+void get_light_info(int i, double* x, double* y, double* z) {
+    Vec p = (i == 0) ? SC.light1_pos : SC.light2_pos;
+    *x = p.x; *y = p.y; *z = p.z;
+}
+
+int get_standalone_sphere_count() { return (int)SC.standalone_spheres.size(); }
+void get_standalone_sphere(int i, double* cx, double* cy, double* cz, double* gr, double* cr) {
+    auto& s = SC.standalone_spheres[i];
+    *cx = s.center.x; *cy = s.center.y; *cz = s.center.z;
+    *gr = s.glass_radius; *cr = s.chrome_radius;
+}
+
+int get_glass_sub_count() { return (int)glass_subs.size(); }
+void get_glass_sub(int i, double* x0, double* y0, double* z0, double* x1, double* y1, double* z1) {
+    auto& g = glass_subs[i];
+    *x0 = g.x0; *y0 = g.y0; *z0 = g.z0; *x1 = g.x1; *y1 = g.y1; *z1 = g.z1;
+}
+
+// Initialize scene from YAML string (for wireframe preview without rendering)
+int init_scene_from_yaml_str(const char* yaml_str) {
+    YamlConfig yaml;
+    if (!yaml.load_from_string(yaml_str)) return -1;
+    std::string version = yaml.get_string("version");
+    if (version != "nanore@2") return -2;
+    init_scene(yaml);
+    return 0;
+}
+
+} // extern "C"
+#endif // NANORE_GUI
+
+// --- Entry points ---
+#ifdef __EMSCRIPTEN__
 int main() { return 0; }
-
 #else
-// --- Native CLI entry point ---
-
 int main(int argc, char* argv[]) {
     if (argc < 2) {
+#ifdef NANORE_GUI
+        return gui_main(argc, argv);
+#else
         fprintf(stderr, "Usage: %s <scene.yaml>\n", argv[0]);
         return 1;
+#endif
     }
     const char* scene_file = argv[1];
     YamlConfig yaml;

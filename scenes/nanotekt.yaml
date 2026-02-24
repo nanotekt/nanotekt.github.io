@@ -1,9 +1,9 @@
 version: nanore@2
 
 rendering:
-  width: 1024
-  height: 1024
-  samples: 32
+  width: 256
+  height: 256
+  samples: 1
   fog_max_dist: 80.0
 
 camera:
