@@ -297,18 +297,22 @@ var Module = {
     }
   }
 
-  // Zoom with scroll wheel
+  // Zoom with scroll wheel — zooms centered on mouse pointer
   canvasWrap.addEventListener('wheel', function(e) {
     e.preventDefault();
-    var rect = canvasWrap.getBoundingClientRect();
-    var mx = e.clientX - rect.left;
-    var my = e.clientY - rect.top;
+    var canvasRect = canvas.getBoundingClientRect();
+    // Mouse position relative to the canvas's current rendered top-left
+    var mx = e.clientX - canvasRect.left;
+    var my = e.clientY - canvasRect.top;
+    // Convert to canvas-space (undo current zoom)
+    var cx = mx / zoom;
+    var cy = my / zoom;
     var oldZoom = zoom;
     var factor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
     zoom = Math.min(Math.max(zoom * factor, 0.25), 20);
-    // Zoom towards cursor
-    panX = mx - (mx - panX) * (zoom / oldZoom);
-    panY = my - (my - panY) * (zoom / oldZoom);
+    // Adjust pan so the point under the cursor stays fixed
+    panX += cx * (oldZoom - zoom);
+    panY += cy * (oldZoom - zoom);
     applyTransform();
   }, {passive: false});
 
